@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>禁闭逃杀 — 公共视图</title>
+<link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+<div class="page">
+  <div class="panel" id="panel">
+    <div class="center-msg"><span class="big">加载中...</span></div>
+  </div>
+</div>
+
+<script src="/map-data.js"></script>
+<script src="/ws-client.js"></script>
+<script>
+const panel = document.getElementById("panel");
+const PHASE_TEXT = { setup: "等待创建游戏", prep: "准备阶段", in_progress: "游戏进行中", ended: "游戏结束" };
+let activeTab = "map";
+let latestState = null;
+
+connectGameSocket((state) => {
+  latestState = state;
+  render();
+});
+
+function render() {
+  const state = latestState;
+  if (!state) return;
+
+  if (state.phase === "ended") {
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title">禁闭逃杀</span>
+        <span class="round-badge">第 <span class="round-number">${state.round}</span> 回合</span>
+      </div>
+      <div class="panel-body">
+        <div class="card">
+          <div style="font-weight:700;font-size:20px;margin-bottom:16px;text-align:center;">游戏结束 · 排行榜</div>
+          <div style="overflow-x:auto;">${rankingTableHtml(state.players)}</div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-title">禁闭逃杀</span>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <span class="round-badge">第 <span class="round-number">${state.round}</span> 回合</span>
+        <div class="tabs">
+          <div class="tab ${activeTab === "map" ? "active" : ""}" id="tab-map">地图</div>
+          <div class="tab ${activeTab === "ranking" ? "active" : ""}" id="tab-ranking">排行榜</div>
+          <div class="tab ${activeTab === "rules" ? "active" : ""}" id="tab-rules">游戏规则</div>
+          <div class="tab ${activeTab === "video" ? "active" : ""}" id="tab-video">视频</div>
+        </div>
+        <span style="font-size:13px;color:#c9ccd1;">
+          <span class="status-dot ${state.phase === "setup" ? "off" : "on"}"></span>${PHASE_TEXT[state.phase] || ""}${state.playerCount ? " · " + state.playerCount + " 名玩家" : ""}
+        </span>
+      </div>
+    </div>
+    <div class="panel-body" id="body"></div>
+  `;
+  panel.querySelector("#tab-map").addEventListener("click", () => { activeTab = "map"; render(); });
+  panel.querySelector("#tab-ranking").addEventListener("click", () => { activeTab = "ranking"; render(); });
+  panel.querySelector("#tab-rules").addEventListener("click", () => { activeTab = "rules"; render(); });
+  panel.querySelector("#tab-video").addEventListener("click", () => { activeTab = "video"; render(); });
+
+  const body = panel.querySelector("#body");
+  if (activeTab === "ranking") {
+    body.innerHTML = `
+      <div class="card">
+        <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">排行榜（存活优先，其次比生命值）</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players)}</div>
+      </div>`;
+  } else if (activeTab === "rules") {
+    renderGameRules(body, state);
+  } else if (activeTab === "video") {
+    body.innerHTML = `
+      <div class="video-wrap">
+        <iframe src="https://www.youtube.com/embed/K21WLdWRL9s" title="禁闭逃杀 - 游戏规则"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+      </div>`;
+  } else {
+    // Poison damage reference only ever shows alongside the map, not on the other tabs.
+    renderMap(body, state.poisonFloors);
+    body.querySelectorAll(".room").forEach((el) => {
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => showRoomInfo(el.dataset.roomId));
+    });
+    renderPoisonInfoBox(body, state);
+  }
+}
+
+function renderPoisonInfoBox(container, state) {
+  const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
+  const box = document.createElement("div");
+  box.className = "poison-info-box";
+  box.innerHTML = `
+    <div class="poison-info-title">毒气伤害</div>
+    <table>${poisonDamageRows(table, state.round)}</table>
+  `;
+  container.appendChild(box);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>禁闭逃杀 — 管理员视图</title>
+<link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+<div class="page">
+  <div class="panel" id="panel">
+    <div class="center-msg"><span class="big">加载中...</span></div>
+  </div>
+</div>
+
+<script src="/map-data.js"></script>
+<script src="/ws-client.js"></script>
+<script src="/auth.js"></script>
+<script>
+const panel = document.getElementById("panel");
+const PW_KEY = "jbts_admin_pw";
+let adminPassword = sessionStorage.getItem(PW_KEY);
+let latestState = null;
+let socket = null;
+
+// One global edit mode covers every editable field (per-player stats/health,
+// round, poison floors) so admin edits commit together in a single broadcast
+// instead of field-by-field.
+let isEditing = false;
+let draft = null;
+let adminTab = "players";
+
+function startEdit(state) {
+  isEditing = true;
+  draft = {
+    players: Object.fromEntries(state.players.map((p) => [p.id, { stats: { ...p.stats }, health: p.health }])),
+    round: state.round,
+    poisonFloors: new Set(state.poisonFloors),
+  };
+  render();
+}
+
+function cancelEdit() {
+  isEditing = false;
+  draft = null;
+  render();
+}
+
+function commitEdit(state) {
+  const payload = {
+    type: "admin:commitEdits",
+    players: Object.entries(draft.players).map(([id, v]) => ({ id: Number(id), stats: v.stats, health: v.health })),
+    password: adminPassword,
+  };
+  if (state.phase === "in_progress") {
+    payload.round = draft.round;
+    payload.poisonFloors = [...draft.poisonFloors];
+  }
+  socket.send(payload);
+  isEditing = false;
+  draft = null;
+}
+
+async function boot() {
+  if (adminPassword) {
+    const ok = await verifyAdminPassword(adminPassword);
+    if (!ok) {
+      adminPassword = null;
+      sessionStorage.removeItem(PW_KEY);
+    }
+  }
+  if (adminPassword) startApp();
+  else renderLogin();
+}
+
+function renderLogin() {
+  panel.innerHTML = `
+    <div class="panel-header"><span class="panel-title">禁闭逃杀 · 管理员</span></div>
+    <div class="panel-body" style="display:flex;justify-content:center;">
+      <div class="card" style="display:flex;flex-direction:column;gap:14px;width:320px;max-width:100%;">
+        <div style="font-weight:700;font-size:16px;">管理员登录</div>
+        <input type="password" id="login-pw" placeholder="密码" autocomplete="off">
+        <div id="login-error" class="modal-error" style="display:none;">密码错误</div>
+        <button class="btn" id="login-btn">登录</button>
+      </div>
+    </div>`;
+
+  const attempt = async () => {
+    const pw = panel.querySelector("#login-pw").value;
+    const ok = await verifyAdminPassword(pw);
+    if (ok) {
+      adminPassword = pw;
+      sessionStorage.setItem(PW_KEY, pw);
+      startApp();
+    } else {
+      panel.querySelector("#login-error").style.display = "block";
+    }
+  };
+  panel.querySelector("#login-btn").addEventListener("click", attempt);
+  panel.querySelector("#login-pw").addEventListener("keydown", (e) => { if (e.key === "Enter") attempt(); });
+  panel.querySelector("#login-pw").focus();
+}
+
+function startApp() {
+  if (socket) { render(); return; }
+  socket = connectGameSocket((state) => {
+    latestState = state;
+    render();
+  });
+}
+
+function render() {
+  const state = latestState;
+  if (!state) return;
+  if (state.phase === "setup") renderSetup(state);
+  else if (state.phase === "ended") renderEndedAdmin(state);
+  else renderDashboard(state);
+}
+
+function renderSetup(state) {
+  const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
+
+  panel.innerHTML = `
+    <div class="panel-header"><span class="panel-title">禁闭逃杀 · 管理员</span></div>
+    <div class="panel-body" style="display:flex;flex-direction:column;align-items:center;gap:24px;">
+      <div class="card" style="width:420px;max-width:100%;">
+        <div style="font-weight:700;font-size:16px;margin-bottom:4px;">毒气伤害设置</div>
+        <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
+          设置每回合"毒气"造成的生命值伤害（仅作说明展示给玩家/公共视图，不会自动扣血）。仅可在创建游戏前修改。
+        </div>
+        <table class="stats-table">
+          <thead><tr><th>回合</th><th>生命消耗</th><th></th></tr></thead>
+          <tbody id="poison-damage-tbody">
+            ${table.map((row, i) => `
+              <tr>
+                <td>第 ${row.round} 回合</td>
+                <td><input type="number" class="edit-input" min="0" data-index="${i}" value="${row.damage}"></td>
+                <td><button class="btn secondary" data-remove-index="${i}" style="padding:4px 10px;font-size:12px;">×</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        <button class="btn secondary" id="add-round-btn" style="margin-top:10px;font-size:12px;padding:6px 14px;">+ 添加回合</button>
+      </div>
+      <div class="card" style="display:flex;flex-direction:column;gap:16px;width:360px;max-width:100%;">
+        <div style="font-weight:700;font-size:16px;">创建游戏</div>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#c9ccd1;">
+          玩家人数
+          <input type="number" id="player-count" min="1" max="200" value="6">
+        </label>
+        <button class="btn" id="create-btn">创建游戏</button>
+      </div>
+    </div>`;
+
+  function sendTable(newTable) {
+    socket.send({ type: "admin:setPoisonDamageTable", table: newTable, password: adminPassword });
+  }
+
+  panel.querySelectorAll("[data-index]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const i = Number(input.dataset.index);
+      const newTable = table.map((r) => ({ ...r }));
+      newTable[i].damage = Math.max(0, Number(input.value) || 0);
+      sendTable(newTable);
+    });
+  });
+  panel.querySelectorAll("[data-remove-index]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.removeIndex);
+      sendTable(table.filter((_, idx) => idx !== i));
+    });
+  });
+  panel.querySelector("#add-round-btn").addEventListener("click", () => {
+    const maxRound = table.reduce((m, r) => Math.max(m, r.round), 0);
+    sendTable([...table.map((r) => ({ ...r })), { round: maxRound + 1, damage: 0 }]);
+  });
+
+  panel.querySelector("#create-btn").addEventListener("click", () => {
+    const n = Number(panel.querySelector("#player-count").value);
+    if (n > 0) socket.send({ type: "admin:createGame", playerCount: n, password: adminPassword });
+  });
+}
+
+function renderDashboard(state) {
+  const isPrep = state.phase === "prep";
+  const isProgress = state.phase === "in_progress";
+  const roundArea = isEditing && isProgress
+    ? `<span class="round-badge">第</span>
+       <button class="stepper-btn sm" id="round-dec">－</button>
+       <input type="number" class="edit-input" id="round-input" min="0" value="${draft.round}" style="width:52px;font-size:18px;font-weight:800;text-align:center;">
+       <button class="stepper-btn sm" id="round-inc">＋</button>
+       <span class="round-badge">回合</span>`
+    : `<span class="round-badge">第 <span class="round-number">${state.round}</span> 回合</span>`;
+
+  panel.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-title">禁闭逃杀 · 管理员</span>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span id="round-area" style="display:flex;align-items:center;gap:6px;">${roundArea}</span>
+        <div class="tabs">
+          <div class="tab ${adminTab === "players" ? "active" : ""}" id="admin-tab-players">玩家属性</div>
+          <div class="tab ${adminTab === "map" ? "active" : ""}" id="admin-tab-map">地图</div>
+          <div class="tab ${adminTab === "poison" ? "active" : ""}" id="admin-tab-poison">毒气伤害</div>
+          <div class="tab ${adminTab === "ranking" ? "active" : ""}" id="admin-tab-ranking">排行榜</div>
+          <div class="tab ${adminTab === "rules" ? "active" : ""}" id="admin-tab-rules">游戏规则</div>
+        </div>
+        ${isEditing
+          ? `<button class="btn" id="commit-btn" style="padding:6px 14px;font-size:12px;">确认</button>
+             <button class="btn secondary" id="cancel-btn" style="padding:6px 14px;font-size:12px;">取消</button>`
+          : `<button class="btn secondary" id="edit-btn" style="padding:6px 14px;font-size:12px;">编辑</button>`
+        }
+      </div>
+    </div>
+    <div style="padding:10px 22px 0;font-size:13px;color:#c9ccd1;">
+      <span class="status-dot on"></span>${isPrep ? "准备阶段" : "游戏进行中"} · ${state.playerCount} 名玩家
+    </div>
+    <div class="panel-body" id="tab-body"></div>
+    <div style="display:flex;justify-content:flex-end;gap:12px;padding:0 22px 22px;">
+      ${isPrep ? `<button class="btn" id="start-btn" ${isEditing ? "disabled" : ""}>开始游戏</button>` : ""}
+      ${isProgress ? `<button class="btn secondary" id="end-btn" ${isEditing ? "disabled" : ""}>结束游戏</button>` : ""}
+    </div>
+  `;
+
+  panel.querySelector("#admin-tab-players").addEventListener("click", () => { adminTab = "players"; render(); });
+  panel.querySelector("#admin-tab-map").addEventListener("click", () => { adminTab = "map"; render(); });
+  panel.querySelector("#admin-tab-poison").addEventListener("click", () => { adminTab = "poison"; render(); });
+  panel.querySelector("#admin-tab-ranking").addEventListener("click", () => { adminTab = "ranking"; render(); });
+  panel.querySelector("#admin-tab-rules").addEventListener("click", () => { adminTab = "rules"; render(); });
+
+  if (isEditing && isProgress) {
+    panel.querySelector("#round-input").addEventListener("input", (e) => {
+      draft.round = Number(e.target.value) || 0;
+    });
+    panel.querySelector("#round-dec").addEventListener("click", () => {
+      draft.round = Math.max(0, draft.round - 1);
+      render();
+    });
+    panel.querySelector("#round-inc").addEventListener("click", () => {
+      draft.round = draft.round + 1;
+      render();
+    });
+  }
+
+  const tabBody = panel.querySelector("#tab-body");
+
+  if (adminTab === "players") {
+    tabBody.innerHTML = `
+      <div class="card">
+        <div style="font-weight:700;font-size:16px;margin-bottom:12px;">玩家属性${isEditing ? "（编辑中，点击上方“确认”生效）" : "（实时）"}</div>
+        <div style="overflow-x:auto;">
+          <table class="stats-table">
+            <thead><tr><th>玩家</th><th>生命</th><th>状态</th><th>属性状态</th><th>位置</th><th>武力</th><th>速度</th><th>负重</th></tr></thead>
+            <tbody id="players-tbody"></tbody>
+          </table>
+        </div>
+      </div>`;
+    renderPlayersTable(tabBody.querySelector("#players-tbody"), state);
+  } else if (adminTab === "map" && isPrep) {
+    tabBody.innerHTML = `
+      <div class="card">
+        <div style="font-weight:700;font-size:16px;margin-bottom:4px;">玩家出生点选择情况</div>
+        <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">玩家在准备阶段自行选择出生点，此处仅供查看</div>
+        <div id="spawn-map"></div>
+      </div>`;
+    const spawnMapEl = tabBody.querySelector("#spawn-map");
+    renderMap(spawnMapEl, [], false);
+    renderMeeples(spawnMapEl.querySelector(".map-img-wrap"), state.players);
+  } else if (adminTab === "map" && isProgress) {
+    tabBody.innerHTML = `
+      <div class="card">
+        <div style="font-weight:700;font-size:16px;margin-bottom:4px;">楼层中毒 / 玩家位置</div>
+        <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
+          ${isEditing ? "点击左侧楼层标签以激活/解除该层中毒（需点击“确认”生效）" : "点击上方“编辑”以修改中毒楼层"}
+          · 拖动玩家图标到房间中标记位置（立即生效，拖回下方框内可移除）
+        </div>
+        <div id="meeple-tray" class="meeple-tray"></div>
+        <div id="poison-map"></div>
+      </div>`;
+    const poisonMapEl = tabBody.querySelector("#poison-map");
+    const activeFloors = isEditing ? [...draft.poisonFloors] : state.poisonFloors;
+    renderMap(poisonMapEl, activeFloors, isEditing);
+    if (isEditing) {
+      poisonMapEl.querySelectorAll(".floor-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const floor = chip.dataset.floor;
+          if (draft.poisonFloors.has(floor)) draft.poisonFloors.delete(floor);
+          else draft.poisonFloors.add(floor);
+          render();
+        });
+      });
+    }
+    renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
+    renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);
+    tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => attachMeepleDrag(el, state));
+  } else if (adminTab === "poison") {
+    const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
+    tabBody.innerHTML = `
+      <div class="card poison-damage-page">
+        <div style="font-weight:700;font-size:20px;margin-bottom:16px;text-align:center;">毒气伤害对照表</div>
+        <table class="stats-table">
+          <thead><tr><th>回合</th><th>生命消耗</th></tr></thead>
+          <tbody>${poisonDamageRows(table, state.round)}</tbody>
+        </table>
+      </div>`;
+  } else if (adminTab === "ranking") {
+    tabBody.innerHTML = `
+      <div class="card">
+        <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">排行榜（存活优先，其次比生命值）</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players)}</div>
+      </div>`;
+  } else if (adminTab === "rules") {
+    renderGameRules(tabBody, state);
+  }
+
+  if (isEditing) {
+    panel.querySelector("#commit-btn").addEventListener("click", () => commitEdit(state));
+    panel.querySelector("#cancel-btn").addEventListener("click", () => cancelEdit());
+  } else {
+    panel.querySelector("#edit-btn").addEventListener("click", () => startEdit(state));
+  }
+
+  if (isPrep) {
+    panel.querySelector("#start-btn").addEventListener("click", () => {
+      if (!isEditing) socket.send({ type: "admin:startGame", password: adminPassword });
+    });
+  }
+  if (isProgress) {
+    panel.querySelector("#end-btn").addEventListener("click", () => {
+      if (isEditing) return;
+      if (confirm("确定要结束游戏并显示排行榜吗？")) {
+        socket.send({ type: "admin:endGame", password: adminPassword });
+      }
+    });
+  }
+}
+
+function renderMeepleTray(tray, state) {
+  if (!tray) return;
+  const unplaced = state.players.filter((p) => !p.room);
+  tray.innerHTML = unplaced.length
+    ? unplaced.map((p) => `<div class="meeple" data-player-id="${p.id}" style="background:${meepleColor(p.id)};">${p.id}</div>`).join("")
+    : `<span class="meeple-tray-empty">所有玩家已放置到房间</span>`;
+}
+
+// Pointer Events (not native HTML5 drag-and-drop) so this works with touch on
+// phones/tablets, not just mouse.
+function attachMeepleDrag(el, state) {
+  el.classList.add("draggable");
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    e.preventDefault();
+    const playerId = Number(el.dataset.playerId);
+
+    const ghost = document.createElement("div");
+    ghost.className = "meeple-drag-ghost";
+    ghost.style.background = meepleColor(playerId);
+    ghost.textContent = playerId;
+    ghost.style.left = e.clientX + "px";
+    ghost.style.top = e.clientY + "px";
+    document.body.appendChild(ghost);
+    el.classList.add("dragging");
+
+    let lastHover = null;
+    function findDropTarget(x, y) {
+      const under = document.elementFromPoint(x, y);
+      if (!under) return null;
+      const room = under.closest(".room");
+      if (room && !TRANSIT_ROOM_IDS.includes(room.dataset.roomId)) {
+        return { kind: "room", el: room, room: room.dataset.roomId };
+      }
+      const tray = under.closest("#meeple-tray");
+      if (tray) return { kind: "tray", el: tray };
+      return null;
+    }
+    function onMove(ev) {
+      ghost.style.left = ev.clientX + "px";
+      ghost.style.top = ev.clientY + "px";
+      const target = findDropTarget(ev.clientX, ev.clientY);
+      const hoverEl = target ? target.el : null;
+      if (hoverEl !== lastHover) {
+        if (lastHover) lastHover.classList.remove("drop-hover");
+        if (hoverEl) hoverEl.classList.add("drop-hover");
+        lastHover = hoverEl;
+      }
+    }
+    function onUp(ev) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.removeChild(ghost);
+      el.classList.remove("dragging");
+      if (lastHover) lastHover.classList.remove("drop-hover");
+
+      const target = findDropTarget(ev.clientX, ev.clientY);
+      if (target && target.kind === "room") {
+        socket.send({ type: "admin:setPlayerRoom", playerId, room: target.room, password: adminPassword });
+      } else if (target && target.kind === "tray") {
+        socket.send({ type: "admin:setPlayerRoom", playerId, room: null, password: adminPassword });
+      }
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+}
+
+function fieldStepperHtml(pid, field, value) {
+  return `
+    <div class="stepper-inline">
+      <button class="stepper-btn sm" data-pid="${pid}" data-field="${field}" data-delta="-1">－</button>
+      <input type="number" class="edit-input" data-pid="${pid}" data-field="${field}" value="${value}">
+      <button class="stepper-btn sm" data-pid="${pid}" data-field="${field}" data-delta="1">＋</button>
+    </div>`;
+}
+
+function statsReadyTagHtml(stats) {
+  const ready = isStatsReady(stats);
+  return `<span class="pill-tag ${ready ? "green" : "amber"}">${ready ? "已准备" : "待分配"}</span>`;
+}
+
+// A shared room means combat/乱斗 triggers there. Each conflicted room gets
+// its own stable color so admin can visually match up who's colliding where.
+function roomLabelHtml(room, roomCounts, conflictColors) {
+  if (!room) return "—";
+  const label = ROOM_LABELS[room] || room;
+  const shared = roomCounts && roomCounts[room] > 1;
+  if (!shared) return label;
+  // Emoji glyphs ignore CSS color in most browsers, so a colored dot is used
+  // instead of a ⚠ — that's the only reliable way to distinguish which
+  // conflicted room is which at a glance.
+  const color = (conflictColors && conflictColors[room]) || "#ff8a80";
+  return `<span style="color:${color};font-weight:700;" title="该房间有多名玩家，将触发战斗/乱斗"><span class="room-conflict-dot" style="background:${color};"></span>${label}</span>`;
+}
+
+function healthCellHtml(pid, health, editable) {
+  return `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+      ${editable ? fieldStepperHtml(pid, "health", health) : `<span>${health}</span>`}
+      ${miniHealthBarHtml(health)}
+    </div>`;
+}
+
+function renderPlayersTable(tbody, state) {
+  const roomCounts = {};
+  for (const pl of state.players) {
+    if (pl.room) roomCounts[pl.room] = (roomCounts[pl.room] || 0) + 1;
+  }
+  const conflictColors = assignRoomConflictColors(roomCounts);
+
+  tbody.innerHTML = state.players.map((p) => {
+    if (isEditing) {
+      const d = draft.players[p.id];
+      const dead = d.health <= 0;
+      return `<tr>
+        <td>玩家 ${p.id}</td>
+        <td>${healthCellHtml(p.id, d.health, true)}</td>
+        <td><button class="btn ${dead ? "" : "secondary"}" data-toggle-dead="${p.id}" style="padding:5px 10px;font-size:12px;">${dead ? "复活" : "标记死亡"}</button></td>
+        <td>${statsReadyTagHtml(d.stats)}</td>
+        <td>${roomLabelHtml(p.room, roomCounts, conflictColors)}</td>
+        <td>${fieldStepperHtml(p.id, "power", d.stats.power)}</td>
+        <td>${fieldStepperHtml(p.id, "speed", d.stats.speed)}</td>
+        <td>${fieldStepperHtml(p.id, "weight", d.stats.weight)}</td>
+      </tr>`;
+    }
+    const dead = p.health <= 0;
+    const sumClass = (p.stats.power + p.stats.speed + p.stats.weight) >= STAT_POINTS_TOTAL ? "sum-full" : "";
+    return `<tr>
+      <td>玩家 ${p.id}</td>
+      <td>${healthCellHtml(p.id, p.health, false)}</td>
+      <td><span class="pill-tag ${dead ? "purple" : "green"}">${dead ? "暗影" : "存活"}</span></td>
+      <td>${statsReadyTagHtml(p.stats)}</td>
+      <td>${roomLabelHtml(p.room, roomCounts, conflictColors)}</td>
+      <td class="${sumClass}">${p.stats.power}</td>
+      <td>${p.stats.speed}</td>
+      <td>${p.stats.weight}</td>
+    </tr>`;
+  }).join("");
+
+  if (isEditing) {
+    tbody.querySelectorAll(".edit-input").forEach((input) => {
+      input.addEventListener("change", () => {
+        const pid = Number(input.dataset.pid);
+        const field = input.dataset.field;
+        const v = Math.round(Number(input.value) || 0);
+        if (field === "health") draft.players[pid].health = v;
+        else draft.players[pid].stats[field] = Math.max(0, v);
+        render();
+      });
+    });
+    tbody.querySelectorAll("[data-delta]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pid = Number(btn.dataset.pid);
+        const field = btn.dataset.field;
+        const delta = Number(btn.dataset.delta);
+        const d = draft.players[pid];
+        if (field === "health") {
+          d.health += delta;
+        } else {
+          d.stats[field] = Math.max(0, d.stats[field] + delta);
+        }
+        render();
+      });
+    });
+    tbody.querySelectorAll("[data-toggle-dead]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pid = Number(btn.dataset.toggleDead);
+        const d = draft.players[pid];
+        d.health = d.health <= 0 ? 10 : -2;
+        render();
+      });
+    });
+  }
+}
+
+function renderEndedAdmin(state) {
+  panel.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-title">禁闭逃杀 · 管理员</span>
+      <span class="round-badge">第 <span class="round-number">${state.round}</span> 回合</span>
+    </div>
+    <div class="panel-body" style="display:flex;flex-direction:column;gap:24px;">
+      <div class="card">
+        <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">游戏结束 · 排行榜</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players)}</div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;">
+        <button class="btn" id="restart-btn">重新开始游戏</button>
+      </div>
+    </div>
+  `;
+  panel.querySelector("#restart-btn").addEventListener("click", () => {
+    if (confirm("确定要重新开始游戏吗？所有数据将被清除。")) {
+      socket.send({ type: "admin:restartGame", password: adminPassword });
+    }
+  });
+}
+
+boot();
+</script>
+</body>
+</html>

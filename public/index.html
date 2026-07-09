@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>禁闭逃杀 — 玩家视图</title>
+<link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+<div class="page">
+  <div class="panel" id="panel">
+    <div class="center-msg"><span class="big">加载中...</span></div>
+  </div>
+</div>
+
+<script src="/map-data.js"></script>
+<script src="/i18n.js"></script>
+<script src="/ws-client.js"></script>
+<script src="/auth.js"></script>
+<script>
+const panel = document.getElementById("panel");
+const LS_KEY = "jbts_player_id";
+let activeTab = "stats";
+let latestState = null;
+let selectingSpawn = false;
+
+panel.querySelector(".big").textContent = t("loading");
+
+const socket = connectGameSocket((state) => {
+  latestState = state;
+  render();
+});
+
+function myPlayerId() {
+  const v = Number(localStorage.getItem(LS_KEY));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function roundBadge(state) {
+  const lang = getLang();
+  const inner = `<span class="round-number">${state.round}</span>`;
+  return lang === "en"
+    ? `<span class="round-badge">Round ${inner}</span>`
+    : `<span class="round-badge">第 ${inner} 回合</span>`;
+}
+
+function attachLangToggle() {
+  const btn = panel.querySelector("#lang-toggle");
+  if (btn) btn.addEventListener("click", () => { toggleLang(); render(); });
+}
+
+// Shown during prep (phase 2) so the player knows whether they still need to
+// finish allocating gene points and/or picking a spawn room.
+function readinessTagHtml(player) {
+  const statsReady = isStatsReady(player.stats);
+  const spawnReady = !!player.room;
+  const ready = statsReady && spawnReady;
+  if (ready) {
+    return `<span class="pill-tag green">${t("ready")}</span>`;
+  }
+  const missing = [];
+  if (!statsReady) missing.push(t("needStats"));
+  if (!spawnReady) missing.push(t("needSpawn"));
+  return `<span class="pill-tag red">${t("incomplete")}</span><span class="ready-missing">${t("needed")}${missing.join(" · ")}</span>`;
+}
+
+function render() {
+  const state = latestState;
+  if (!state) return;
+  document.title = getLang() === "en" ? "Lockdown Purge (禁闭逃杀) — Player View" : "禁闭逃杀 — 玩家视图";
+
+  if (state.phase === "setup") {
+    panel.innerHTML = `
+      <div class="panel-header"><span class="panel-title">${t("gameTitle")}</span>${langToggleHtml()}</div>
+      <div class="center-msg">
+        <span class="big">${t("gameNotStarted")}</span>
+        <span>${t("waitForAdmin")}</span>
+      </div>`;
+    attachLangToggle();
+    return;
+  }
+
+  const playerId = myPlayerId();
+  const player = playerId && state.players.find((p) => p.id === playerId);
+
+  if (!player) {
+    const buttons = state.players
+      .map((p) => `<div class="player-btn" data-id="${p.id}">${t("player")} ${p.id}</div>`)
+      .join("");
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title">${t("gameTitle")}</span>
+        <div style="display:flex;align-items:center;gap:14px;">
+          ${roundBadge(state)}
+          ${langToggleHtml()}
+        </div>
+      </div>
+      <div class="panel-body" style="display:flex;flex-direction:column;align-items:center;gap:18px;">
+        <div class="big" style="font-size:18px;font-weight:700;">${t("chooseCharacter")}</div>
+        <div class="player-grid">${buttons}</div>
+      </div>`;
+    panel.querySelectorAll(".player-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        localStorage.setItem(LS_KEY, btn.dataset.id);
+        render();
+      });
+    });
+    attachLangToggle();
+    return;
+  }
+
+  if (state.phase === "ended") {
+    renderEnded(state, player);
+    return;
+  }
+
+  const lang = getLang();
+  const needsSpawn = state.phase === "prep" && !player.room;
+  const needsStats = state.phase === "prep" && !isStatsReady(player.stats);
+  panel.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-title">${t("gameTitle")}</span>
+      <div class="header-controls">
+        <div class="header-round-row">
+          ${roundBadge(state)}
+          ${langToggleHtml()}
+        </div>
+        <div class="tabs">
+          <div class="tab ${activeTab === "map" ? "active" : ""} ${needsSpawn ? "needs-attention" : ""}" id="tab-map">${t("tabMap")}</div>
+          <div class="tab ${activeTab === "stats" ? "active" : ""} ${needsStats ? "needs-attention" : ""}" id="tab-stats">${t("tabStats")}</div>
+          <div class="tab ${activeTab === "poison" ? "active" : ""}" id="tab-poison">${t("tabPoison")}</div>
+          <div class="tab ${activeTab === "ranking" ? "active" : ""}" id="tab-ranking">${t("tabRanking")}</div>
+          <div class="tab ${activeTab === "rules" ? "active" : ""}" id="tab-rules">${t("tabRules")}</div>
+        </div>
+      </div>
+    </div>
+    <div class="you-bar">
+      <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span>${t("currentCharacter")}${t("player")} ${player.id}</span>
+        ${state.phase === "prep" ? readinessTagHtml(player) : ""}
+      </span>
+      <a id="switch-player">${t("switchCharacter")}</a>
+    </div>
+    <div class="panel-body${activeTab === "rules" ? " rules-tab-active" : ""}" id="body"></div>
+  `;
+  panel.querySelector("#tab-map").addEventListener("click", () => { activeTab = "map"; render(); });
+  panel.querySelector("#tab-stats").addEventListener("click", () => { activeTab = "stats"; render(); });
+  panel.querySelector("#tab-poison").addEventListener("click", () => { activeTab = "poison"; render(); });
+  panel.querySelector("#tab-ranking").addEventListener("click", () => { activeTab = "ranking"; render(); });
+  panel.querySelector("#tab-rules").addEventListener("click", () => { activeTab = "rules"; render(); });
+  attachLangToggle();
+  panel.querySelector("#switch-player").addEventListener("click", async () => {
+    const ok = await showPasswordModal(t("switchPasswordPrompt"), lang);
+    if (ok) {
+      localStorage.removeItem(LS_KEY);
+      render();
+    }
+  });
+
+  const body = panel.querySelector("#body");
+  if (activeTab === "map") {
+    renderMapTab(body, state, player);
+  } else if (activeTab === "poison") {
+    renderPoisonDamageTab(body, state);
+  } else if (activeTab === "ranking") {
+    body.innerHTML = `
+      <div class="card">
+        <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">${t("rankingTitle")}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player.id, lang })}</div>
+      </div>`;
+  } else if (activeTab === "rules") {
+    renderGameRules(body, state, lang);
+  } else if (state.phase === "prep") {
+    renderStatsEditor(body, player);
+  } else {
+    renderStatsReadonly(body, player);
+  }
+}
+
+function renderPoisonDamageTab(container, state) {
+  const lang = getLang();
+  const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
+  container.innerHTML = `
+    <div class="card poison-damage-page">
+      <div style="font-weight:700;font-size:20px;margin-bottom:16px;text-align:center;">${t("poisonTableTitle")}</div>
+      <table class="stats-table">
+        <thead><tr><th>${t("colRound")}</th><th>${t("colHealthLoss")}</th></tr></thead>
+        <tbody>${poisonDamageRows(table, state.round, lang)}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderMapTab(container, state, player) {
+  const lang = getLang();
+  const isPrep = state.phase === "prep";
+  const spawnLabel = player.room ? getRoomLabel(player.room, lang) : t("notChosen");
+
+  container.innerHTML = `
+    ${isPrep ? `
+    <div class="spawn-bar">
+      <span>${t("spawnLabel")}<b>${spawnLabel}</b></span>
+      <button class="btn secondary" id="spawn-btn" style="padding:6px 14px;font-size:12px;">
+        ${selectingSpawn ? t("cancelSelect") : (player.room ? t("reselectSpawn") : t("chooseSpawn"))}
+      </button>
+    </div>` : ""}
+    <div id="map-el"></div>
+  `;
+
+  const mapEl = container.querySelector("#map-el");
+  renderMap(mapEl, state.poisonFloors, false, lang);
+  // Players only ever see their own token, never anyone else's.
+  renderMeeples(mapEl.querySelector(".map-img-wrap"), state.players.filter((p) => p.id === player.id));
+
+  const inSpawnPick = isPrep && selectingSpawn;
+  mapEl.querySelectorAll(".room").forEach((el) => {
+    const roomId = el.dataset.roomId;
+    if (inSpawnPick && SPAWN_ROOM_IDS.includes(roomId)) {
+      el.classList.add("spawn-selectable");
+      el.addEventListener("click", () => {
+        socket.send({ type: "user:setSpawn", playerId: player.id, room: roomId });
+        selectingSpawn = false;
+        render();
+      });
+    } else if (!inSpawnPick) {
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => showRoomInfo(roomId, lang));
+    }
+  });
+
+  if (!isPrep) return;
+  container.querySelector("#spawn-btn").addEventListener("click", () => {
+    selectingSpawn = !selectingSpawn;
+    render();
+  });
+}
+
+// Below the portrait image: a normal health bar while alive, or a purple
+// "absorption" bar while dead — a shadow's health doubles as remaining
+// absorption debt (-2 shown as "still needs 2"), never as a raw negative number.
+function renderPortraitHealthHtml(player) {
+  const dead = player.health <= 0;
+  if (dead) {
+    const need = Math.max(0, -player.health);
+    const pct = Math.max(0, Math.min(100, ((2 - need) / 2) * 100));
+    return `
+      <div class="portrait-health">
+        <div class="stat-bar-track absorb"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
+        <div class="portrait-health-label dead">${t("needAbsorbPrefix")}<b>${need}</b>${t("needAbsorbSuffix")}</div>
+      </div>`;
+  }
+  const pct = Math.max(0, Math.min(100, (player.health / DEFAULT_HEALTH) * 100));
+  return `
+    <div class="portrait-health">
+      <div class="stat-bar-track health"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
+      <div class="portrait-health-label">${t("healthLabel")}<b>${player.health}</b></div>
+    </div>`;
+}
+
+function objectiveBoxHtml() {
+  return `
+    <div class="objective-box">
+      <div class="objective-row"><span class="objective-tag alive">${t("survivorGoalTag")}</span>${t("survivorGoalText")}</div>
+      <div class="objective-row"><span class="objective-tag dead">${t("shadowGoalTag")}</span>${t("shadowGoalText")}</div>
+    </div>`;
+}
+
+function renderStatsEditor(container, player) {
+  const lang = getLang();
+  const stats = player.stats;
+  const sum = STAT_DEFS.reduce((s, d) => s + (stats[d.id] || 0), 0);
+  const left = STAT_POINTS_TOTAL - sum;
+  const dead = player.health <= 0;
+
+  container.innerHTML = `
+    <div class="stats-panel">
+      <div class="player-portrait">
+        <img class="portrait-img" src="${dead ? "/assets/player-dead.png" : "/assets/player-alive.png"}" alt="${dead ? t("shadowAlt") : t("aliveAlt")}">
+        ${renderPortraitHealthHtml(player)}
+      </div>
+      <div class="stats-rows">
+        <div class="points-left ${left === 0 ? "zero" : ""}">${t("pointsLeftPrefix")}${left} / ${STAT_POINTS_TOTAL}</div>
+        ${STAT_DEFS.map((d) => {
+          const v = stats[d.id] || 0;
+          const pct = (v / STAT_POINTS_TOTAL) * 100;
+          return `
+          <div class="stat-row-v2">
+            <div class="diamond-badge"><span>${d.icon}</span></div>
+            <div class="stat-row-v2-body">
+              <div class="stat-row-v2-label">${lang === "en" ? d.labelEn : d.label}</div>
+              <div class="stat-bar-track"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
+            </div>
+            <div class="stat-row-v2-steppers">
+              <button class="stepper-btn sm" data-action="dec" data-stat="${d.id}" ${v <= 0 ? "disabled" : ""}>－</button>
+              <div class="stat-row-v2-value compact">${v}</div>
+              <button class="stepper-btn sm" data-action="inc" data-stat="${d.id}" ${left <= 0 ? "disabled" : ""}>＋</button>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+    ${objectiveBoxHtml()}
+  `;
+
+  container.querySelectorAll(".stepper-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const statId = btn.dataset.stat;
+      const delta = btn.dataset.action === "inc" ? 1 : -1;
+      const others = STAT_DEFS.filter((d) => d.id !== statId).reduce((s, d) => s + (stats[d.id] || 0), 0);
+      const maxAllowed = STAT_POINTS_TOTAL - others;
+      const v = Math.min(maxAllowed, Math.max(0, (stats[statId] || 0) + delta));
+      stats[statId] = v;
+      socket.send({ type: "user:setStats", playerId: player.id, stats });
+      renderStatsEditor(container, player);
+    });
+  });
+}
+
+function renderStatsReadonly(container, player) {
+  const lang = getLang();
+  const stats = player.stats;
+  const dead = player.health <= 0;
+
+  container.innerHTML = `
+    <div class="stats-panel">
+      <div class="player-portrait">
+        <img class="portrait-img" src="${dead ? "/assets/player-dead.png" : "/assets/player-alive.png"}" alt="${dead ? t("shadowAlt") : t("aliveAlt")}">
+        ${renderPortraitHealthHtml(player)}
+      </div>
+      <div class="stats-rows">
+        ${STAT_DEFS.map((d) => {
+          const v = stats[d.id] || 0;
+          const pct = (v / STAT_POINTS_TOTAL) * 100;
+          return `
+          <div class="stat-row-v2">
+            <div class="diamond-badge"><span>${d.icon}</span></div>
+            <div class="stat-row-v2-body">
+              <div class="stat-row-v2-label">${lang === "en" ? d.labelEn : d.label}</div>
+              <div class="stat-bar-track"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
+            </div>
+            <div class="stat-row-v2-value">${v}</div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+    ${objectiveBoxHtml()}
+  `;
+}
+
+function renderEnded(state, player) {
+  const lang = getLang();
+  panel.innerHTML = `
+    <div class="panel-header">
+      <span class="panel-title">${t("gameTitle")}</span>
+      <div style="display:flex;align-items:center;gap:14px;">
+        ${roundBadge(state)}
+        ${langToggleHtml()}
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="card">
+        <div style="font-weight:700;font-size:18px;margin-bottom:14px;text-align:center;">${t("gameOverRanking")}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player && player.id, lang })}</div>
+      </div>
+    </div>
+  `;
+  attachLangToggle();
+}
+</script>
+</body>
+</html>
