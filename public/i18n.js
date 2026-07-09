@@ -16,7 +16,7 @@ function toggleLang() {
 // Chinese (e.g. "Shadow (暗影)") so players can still recognize them.
 const UI_TEXT = {
   loading: ["加载中...", "Loading..."],
-  gameTitle: ["禁闭逃杀", "Lockdown Purge (禁闭逃杀)"],
+  gameTitle: ["禁闭逃杀", "Confinement Battle Royale (禁闭逃杀)"],
   gameNotStarted: ["游戏尚未开始", "Game hasn't started yet"],
   waitForAdmin: ["请等待管理员创建游戏", "Please wait for the admin to create the game"],
   chooseCharacter: ["选择你的角色", "Choose your character"],

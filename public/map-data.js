@@ -570,7 +570,7 @@ function renderMap(container, poisonFloors, interactive, lang) {
         ).join("")}
       </div>
       <div class="map-img-wrap">
-        <img class="map-img" src="/assets/map.png" alt="${lang === "en" ? "Lockdown Purge (禁闭逃杀) Map" : "禁闭逃杀 地图"}">
+        <img class="map-img" src="/assets/map.png" alt="${lang === "en" ? "Confinement Battle Royale (禁闭逃杀) Map" : "禁闭逃杀 地图"}">
         ${FLOORS.map(
           (f) => `<div class="floor-overlay ${poisoned.has(f.id) ? "poisoned" : ""}" style="top:${f.top}%;height:${f.height}%;"></div>`
         ).join("")}
