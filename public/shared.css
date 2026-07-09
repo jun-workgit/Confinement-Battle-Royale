@@ -106,9 +106,14 @@ html, body {
    either way. The zoom controls below adjust this width further via JS. */
 .public-map-view .map-img { width: 820px; }
 
-.map-zoom-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.map-zoom-controls .btn { padding: 6px 14px; font-size: 14px; }
-.map-zoom-label { font-size: 13px; color: #c9ccd1; min-width: 42px; text-align: center; }
+.map-zoom-controls {
+  position: fixed; bottom: 16px; left: 16px; z-index: 500;
+  background: rgba(18,18,20,0.92); border: 1px solid rgba(214,218,224,0.3); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+}
+.map-zoom-controls .btn { padding: 2px 8px; font-size: 12px; }
+.map-zoom-label { font-size: 11px; color: #c9ccd1; min-width: 30px; text-align: center; }
 
 .floor-overlay { position: absolute; left: 0; width: 100%; pointer-events: none; background: transparent; transition: background 0.2s ease; }
 .floor-overlay.poisoned {
@@ -396,6 +401,7 @@ table.stats-table td.sum-full { color: #d8b258; font-weight: 700; }
 
 @media (max-width: 720px) {
   .poison-info-box { position: static; margin-top: 14px; align-self: center; }
+  .map-zoom-controls { position: static; margin-bottom: 12px; align-self: center; }
 }
 
 .rules-box {
