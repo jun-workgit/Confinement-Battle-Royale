@@ -87,8 +87,10 @@ function render() {
       </div>`;
   } else {
     // Poison damage reference only ever shows alongside the map, not on the other tabs.
-    renderMap(body, state.poisonFloors);
-    body.querySelectorAll(".room").forEach((el) => {
+    body.innerHTML = `<div class="public-map-view"></div>`;
+    const mapWrap = body.querySelector(".public-map-view");
+    renderMap(mapWrap, state.poisonFloors);
+    mapWrap.querySelectorAll(".room").forEach((el) => {
       el.style.cursor = "pointer";
       el.addEventListener("click", () => showRoomInfo(el.dataset.roomId));
     });

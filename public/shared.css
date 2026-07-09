@@ -100,6 +100,11 @@ html, body {
 .map-img-wrap { position: relative; display: inline-block; max-width: 100%; }
 .map-img { display: block; max-width: 100%; width: 1600px; height: auto; border-radius: 4px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
 
+/* Public view only: a smaller map so the whole board fits in one desktop
+   viewport without vertical scrolling. Mobile is unaffected — min-width on
+   .map-wrap still forces horizontal scroll below this size either way. */
+.public-map-view .map-img { width: 820px; }
+
 .floor-overlay { position: absolute; left: 0; width: 100%; pointer-events: none; background: transparent; transition: background 0.2s ease; }
 .floor-overlay.poisoned {
   background: repeating-linear-gradient(115deg, rgba(122, 47, 176, 0.32) 0px, rgba(122, 47, 176, 0.32) 10px, rgba(180, 108, 240, 0.18) 10px, rgba(180, 108, 240, 0.18) 20px);
