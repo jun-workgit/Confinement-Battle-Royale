@@ -68,7 +68,7 @@ function readinessTagHtml(player) {
 function render() {
   const state = latestState;
   if (!state) return;
-  document.title = getLang() === "en" ? "Confinement Battle Royale (禁闭逃杀) — Player View" : "禁闭逃杀 — 玩家视图";
+  document.title = getLang() === "en" ? "Confinement Battle Royale (禁闭逃杀) - Player View" : "禁闭逃杀 — 玩家视图";
 
   if (state.phase === "setup") {
     panel.innerHTML = `

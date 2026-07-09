@@ -52,12 +52,12 @@ const UI_TEXT = {
   survivorGoalTag: ["存活目标", "Survivor Goal"],
   survivorGoalText: [
     "削减他人生命值、保护自身生命值，游戏结束时生命值最高者获胜。",
-    "Reduce others' Health, protect your own — whoever has the most Health when the game ends wins.",
+    "Reduce others' Health, protect your own; whoever has the most Health when the game ends wins.",
   ],
   shadowGoalTag: ["暗影目标", "Shadow (暗影) Goal"],
   shadowGoalText: [
     "与存活玩家同处一室以吸取其生命值，累计吸取满 2 点即可复活。",
-    "Share a room with a living player to absorb their Health — revive once you've absorbed 2 points total.",
+    "Share a room with a living player to absorb their Health; revive once you've absorbed 2 points total.",
   ],
   pointsLeftPrefix: ["剩余可分配点数: ", "Points remaining: "],
   gameOverRanking: ["游戏结束 · 排行榜", "Game Over · Ranking"],

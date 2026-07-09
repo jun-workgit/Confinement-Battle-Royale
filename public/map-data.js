@@ -89,7 +89,7 @@ const ROOM_INFO = {
 const ROOM_INFO_EN = {
   "201": "All three stats each permanently +1, and you may immediately view every player's current gene panel (基因面板).",
   "202": `Immune to "Poison Gas (毒气)" damage; next round you may spend 1 step to take the helicopter to B101, 101, B103, 201, B105;
-Each round an airdrop resupply occurs and accumulates — on entering, a player may pick any one item from all current supplies, first come first served; if there are previously discarded item cards here, the player may also take any number of them for free, up to their own Weight (负重) limit.
+Each round an airdrop resupply occurs and accumulates. On entering, a player may pick any one item from all current supplies, first come first served; if there are previously discarded item cards here, the player may also take any number of them for free, up to their own Capacity (负重) limit.
 
 Round 1 airdrop: 2x Knife
 Round 2 airdrop: 2x Wine
@@ -101,10 +101,10 @@ Round 6 airdrop: 1x Pill`,
   "102": "Passing through or stopping in this room immediately deducts 1 Health.",
   "B101": `Choose one of the following two effects:
 1. In this round's "Poison Gas (毒气)" vote, your 1 vote counts as 10 votes.
-2. Permanently "Detox (解毒)" one poison-gas room. Detox takes effect immediately and is not publicly announced — from this round on, players staying in that room are immune to poison-gas damage.`,
+2. Permanently "Detox (解毒)" one poison-gas room. Detox takes effect immediately and is not publicly announced. From this round on, players staying in that room are immune to poison-gas damage.`,
   "B105": "A player passing through this room may spend 1 step to slide one-way through the garbage chute to B503 Junkyard (垃圾场).",
   "B107": "Draw up to 2 item cards; starting stock: 5x Knife, 2x Pistol, 1x Shotgun.",
-  "B202": "With 1 person, nothing happens. With 2 people, surgery is performed — both gain +4 Health at the settlement phase. With more than 2 people, no surgery occurs and it triggers a brawl (乱斗) instead.",
+  "B202": "With 1 person, nothing happens. With 2 people, surgery is performed: both gain +4 Health at the settlement phase. With more than 2 people, no surgery occurs and it triggers a brawl (乱斗) instead.",
   "B204": "No need to hand in Water/Food this round's settlement phase.",
   "B206": "Draw up to 2 item cards; starting stock: 4x Gold Bar (金条).",
   "B301": "Draw up to 2 item cards; starting stock: 3x Pill, 3x Adrenaline (肾上腺素).",
@@ -199,7 +199,7 @@ const STOPPABLE_ROOM_IDS = [...new Set(ROOMS.map((r) => r.id))].filter((id) => !
 const STAT_DEFS = [
   { id: "power", label: "武力值", labelEn: "Power (武力)", valuePrefix: "武力: ", valuePrefixEn: "Power: ", icon: "💪" },
   { id: "speed", label: "速度值", labelEn: "Speed (速度)", valuePrefix: "剩余步数: ", valuePrefixEn: "Steps Left: ", icon: "🏃" },
-  { id: "weight", label: "负重值", labelEn: "Weight (负重)", valuePrefix: "负重: ", valuePrefixEn: "Weight: ", icon: "💼" },
+  { id: "weight", label: "负重值", labelEn: "Capacity (负重)", valuePrefix: "负重: ", valuePrefixEn: "Capacity: ", icon: "💼" },
 ];
 const STAT_POINTS_TOTAL = 10;
 const DEFAULT_HEALTH = 10;
@@ -246,7 +246,7 @@ const GAME_RULES_SECTIONS = [
     titleEn: "(1) Background & Objective",
     text: `M星球气候异变，地表温度骤降，星球居民被迫转移到地下城生存，能源出现了供不应求的局面。地下城各个区域为了争取能源，每年都会派一名代表前往中心区进行一场虚拟战斗，获胜者可为本区赢得一整年的充足能源。
 本场游戏，玩家作为地下城各个分区的代表，需在两栋建筑物中秘密移动，争夺物资，用各种策略削减他人的生命值，游戏结束时生命值最高的玩家获胜。`,
-    textEn: `Planet M's climate has shifted violently — surface temperatures have plunged, forcing its people underground into subterranean cities, where energy is now in short supply. Each year, every district of the underground city sends one representative to the central zone for a virtual battle; the winner secures a full year of ample energy for their district.
+    textEn: `Planet M's climate has shifted violently: surface temperatures have plunged, forcing its people underground into subterranean cities, where energy is now in short supply. Each year, every district of the underground city sends one representative to the central zone for a virtual battle; the winner secures a full year of ample energy for their district.
 In this game, players represent the various districts of the underground city and must move secretly between two buildings, competing for resources and using strategy to reduce other players' Health, until the player with the highest Health at the end wins.`,
   },
   {
@@ -268,19 +268,19 @@ In this game, players represent the various districts of the underground city an
 2.3 负重机制
 所有道具卡都需要负重才能携带，1张道具卡占用1点负重，除自由阶段外，玩家不能携带超过自身负重的道具卡。`,
     textEn: `Each player starts with 10 Health. The Health cap is 10; at 0 Health, you may continue playing as a "Shadow (暗影)" (see the Shadow Mechanic below).
-Each player starts with 10 Gene Points (基因), which must be allocated across three stats: Power (武力), Speed (速度), and Weight (负重).
+Each player starts with 10 Gene Points (基因), which must be allocated across three stats: Power (武力), Speed (速度), and Capacity (负重).
 
-Power: determines attack strength and combat outcomes (see Combat Mechanic). Speed: determines movement steps (see Movement Mechanic). Weight: determines how many item cards (道具卡) you may carry (see Weight Mechanic).
-Before the game starts, each player allocates their own gene points to build their gene panel — all points must be used. Then each player secretly chooses their spawn room.
+Power: determines attack strength and combat outcomes (see Combat Mechanic). Speed: determines movement steps (see Movement Mechanic). Capacity: determines how many item cards (道具卡) you may carry (see Capacity Mechanic).
+Before the game starts, each player allocates their own gene points to build their gene panel; all points must be used. Then each player secretly chooses their spawn room.
 
 2.1 Combat Mechanic
 If 2 players end up in the same room, combat is triggered; if more than 2 players end up in the same room, a brawl (乱斗) is triggered. The player with the highest Power keeps their Health unchanged; every other player loses Health equal to the difference between their Power and the highest Power. Any room where combat or a brawl occurs is publicly announced.
 
 2.2 Movement Mechanic
-Each player starts from the room they were in last round and moves to another room within their step range. Moving to an adjacent room costs 1 step; moving between floors requires stairs; moving between the two buildings requires the bridge (廊桥) or the helicopter. Every player must move each round, though steps don't have to be fully used — unused steps do not carry over to the next round.
+Each player starts from the room they were in last round and moves to another room within their step range. Moving to an adjacent room costs 1 step; moving between floors requires stairs; moving between the two buildings requires the bridge (廊桥) or the helicopter. Every player must move each round, though steps don't have to be fully used; unused steps do not carry over to the next round.
 
-2.3 Weight Mechanic
-Every item card requires Weight capacity to carry — 1 item card takes up 1 Weight. Except during the Free Phase, a player may never carry more item cards than their Weight allows.`,
+2.3 Capacity Mechanic
+Every item card requires 1 Capacity to carry. Except during the Free Phase, a player may never carry more item cards than their Capacity allows.`,
   },
   {
     id: "flow",
@@ -312,11 +312,11 @@ Every item card requires Weight capacity to carry — 1 item card takes up 1 Wei
     textEn: `The game lasts {{TOTAL_ROUNDS}} rounds total; each round has a Free Phase, an Action Phase, and a Settlement Phase.
 
 3.1 Free Phase
-Each player randomly draws an order card (顺位卡), which determines their turn order in this round's Action Phase. Players may then share information, plan strategy, and trade order cards and item cards — trading is only allowed during the Free Phase. If you hold more item cards than your Weight allows, you must adjust down to your Weight limit by the end of this phase.
+Each player randomly draws an order card (顺位卡), which determines their turn order in this round's Action Phase. Players may then share information, plan strategy, and trade order cards and item cards; trading is only allowed during the Free Phase. If you hold more item cards than your Capacity allows, you must adjust down to your Capacity limit by the end of this phase.
 
 3.2 Action Phase
-Players enter the action room one at a time in order-card sequence, starting from the room they were in last round and moving to another room within step range. After moving, they may take the room's relevant action — such as using the room's special function, or drawing, using, or discarding item cards. Different item cards have different effects; after drawing an item card, you must adjust your held item cards down to your Weight limit — any excess is discarded in that room. Players may voluntarily discard any number of item cards, but only in a room where drawing is allowed.
-Afterward, each player votes for one floor; the floor with the most votes becomes a "Poison Gas (毒气)" floor — in a tie for most votes, all tied floors become poison-gas floors. A floor already marked as poison gas cannot be voted again, and poison gas never dissipates on its own. Any player who stays on a poison-gas floor loses the corresponding Health at the Settlement Phase. {{POISON_SCHEDULE}}
+Players enter the action room one at a time in order-card sequence, starting from the room they were in last round and moving to another room within step range. After moving, they may take the room's relevant action, such as using the room's special function, or drawing, using, or discarding item cards. Different item cards have different effects; after drawing an item card, you must adjust your held item cards down to your Capacity limit; any excess is discarded in that room. Players may voluntarily discard any number of item cards, but only in a room where drawing is allowed.
+Afterward, each player votes for one floor; the floor with the most votes becomes a "Poison Gas (毒气)" floor. In a tie for most votes, all tied floors become poison-gas floors. A floor already marked as poison gas cannot be voted again, and poison gas never dissipates on its own. Any player who stays on a poison-gas floor loses the corresponding Health at the Settlement Phase. {{POISON_SCHEDULE}}
 Once a player finishes their action, they move to the meeting room to wait, and can no longer exchange information with players who haven't acted yet.
 
 3.3 Settlement Phase
@@ -338,14 +338,14 @@ If any player's Health drops to 0 during any settlement step, they are publicly 
     title: "(四) 暗影机制",
     titleEn: "(4) Shadow (暗影) Mechanic",
     text: `"暗影"初始生命值为0，没有负重和武力，只会继承"死亡"时的速度，可不需楼梯上下楼，进入房间后无法使用房间功能和抽取道具卡，无法参与"毒气"投票。当然，也不计入房间人数，不参与战斗或乱斗，不受"毒气"伤害，不需上交水粮。若"暗影"玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1点生命值。当暗影玩家吸取累计大于等于2点生命值后，他将在当轮结算阶段最后复活，下一轮从复活房间继续游戏，基因面板恢复至生前状态，复活后的第一轮依然不受"毒气"伤害，不需上交水粮。`,
-    textEn: `A "Shadow" starts with 0 Health, has no Weight or Power, and only inherits the Speed they had at the moment of "death" (死亡). A Shadow doesn't need stairs to move between floors, cannot use room functions or draw item cards upon entering a room, and cannot vote on "Poison Gas (毒气)". A Shadow also doesn't count toward room occupancy, doesn't take part in combat or brawls, is immune to poison-gas damage, and doesn't need to hand in Water/Food. If a Shadow shares a room with a living player, every living player there loses 1 Health absorbed by each Shadow present. Once a Shadow has absorbed 2 or more Health in total, they revive at the end of that round's Settlement Phase, continuing next round from the room where they revived, with their gene panel restored to its pre-death state. In the first round after reviving, they are still immune to poison-gas damage and don't need to hand in Water/Food.`,
+    textEn: `A "Shadow" starts with 0 Health, has no Capacity or Power, and only inherits the Speed they had at the moment of "death" (死亡). A Shadow doesn't need stairs to move between floors, cannot use room functions or draw item cards upon entering a room, and cannot vote on "Poison Gas (毒气)". A Shadow also doesn't count toward room occupancy, doesn't take part in combat or brawls, is immune to poison-gas damage, and doesn't need to hand in Water/Food. If a Shadow shares a room with a living player, every living player there loses 1 Health absorbed by each Shadow present. Once a Shadow has absorbed 2 or more Health in total, they revive at the end of that round's Settlement Phase, continuing next round from the room where they revived, with their gene panel restored to its pre-death state. In the first round after reviving, they are still immune to poison-gas damage and don't need to hand in Water/Food.`,
   },
   {
     id: "victory",
     title: "(五) 胜利条件",
     titleEn: "(5) Victory Conditions",
     text: `{{TOTAL_ROUNDS}}轮游戏结束后，首先结算玩家手中的金条，1金条可兑换1点生命值。最后，根据玩家的剩余生命值进行排名，"暗影"玩家排名在存活玩家之后。若存活玩家生命值相同，则比较武力；"暗影"玩家之间比较生前武力，武力高的玩家排名靠前。若任意轮次中只剩1名玩家存活，则该玩家直接获胜，游戏立即结束。若游戏中途所有玩家都成为"暗影"，则根据各自生前一轮的生命值进行排名。玩家按照排名先后分别获得9-1个金魔方积分！`,
-    textEn: `After {{TOTAL_ROUNDS}} rounds, Gold Bars (金条) held by players are settled first — 1 Gold Bar converts to 1 Health. Finally, players are ranked by remaining Health, with "Shadow (暗影)" players ranked below living players. If living players are tied on Health, Power breaks the tie; among Shadow players, Power at the moment of death breaks the tie, with higher Power ranking higher. If at any point only 1 player remains alive, that player wins immediately and the game ends at once. If all players become Shadows at some point, ranking is based on each player's Health from the round before they became a Shadow. Players receive 9 down to 1 Gold Cube points (金魔方积分) based on final rank!`,
+    textEn: `After {{TOTAL_ROUNDS}} rounds, Gold Bars (金条) held by players are settled first: 1 Gold Bar converts to 1 Health. Finally, players are ranked by remaining Health, with "Shadow (暗影)" players ranked below living players. If living players are tied on Health, Power breaks the tie; among Shadow players, Power at the moment of death breaks the tie, with higher Power ranking higher. If at any point only 1 player remains alive, that player wins immediately and the game ends at once. If all players become Shadows at some point, ranking is based on each player's Health from the round before they became a Shadow. Players receive 9 down to 1 Gold Cube points (金魔方积分) based on final rank!`,
   },
   {
     id: "summary",
@@ -382,21 +382,21 @@ If any player's Health drops to 0 during any settlement step, they are publicly 
     textEn: `1. Water: consumable; from round 2 onward, used openly at the Settlement Phase to offset part of the hunger penalty
 2. Food: consumable; from round 2 onward, used openly at the Settlement Phase to offset part of the hunger penalty
 3. Pill: consumable; used openly at the Settlement Phase, +2 Health
-4. Adrenaline (肾上腺素): consumable; used openly at the Settlement Phase — next round Speed becomes 10, and no matter how much damage is taken, Health cannot drop below 1 (won't die); Speed returns to normal after next round's Settlement Phase
-5. Wine: consumable; used openly at the Settlement Phase for one dice roll, resolved immediately by the result (1: discard all item cards. 2: nothing happens. 3: Power permanently +1. 4: Speed permanently +1. 5: Weight permanently +1. 6: Health +2)
+4. Adrenaline (肾上腺素): consumable; used openly at the Settlement Phase; next round Speed becomes 10, and no matter how much damage is taken, Health cannot drop below 1 (won't die); Speed returns to normal after next round's Settlement Phase
+5. Wine: consumable; used openly at the Settlement Phase for one dice roll, resolved immediately by the result (1: discard all item cards. 2: nothing happens. 3: Power permanently +1. 4: Speed permanently +1. 5: Capacity permanently +1. 6: Health +2)
 6. Gold Bar (金条): consumable; used when drawing item cards to inspect all item cards currently in the room and take one extra (cannot choose another Gold Bar); at final settlement, 1 Gold Bar converts to 1 Health, but cannot exceed the Health cap
 7. Knife: while held, Power +2
 8. Pistol: while held, Power +2; if the opponent has no gun in combat, Power comparison is skipped and they lose Health equal to your Power directly; if they do have a gun, normal combat rules apply
 9. Shotgun: while held, Power +4; if the opponent has no gun in combat, Power comparison is skipped and they lose Health equal to your Power directly; if they do have a gun, normal combat rules apply
 10. Rope: while held, no stairs needed between floors, but each floor still costs 1 step
 11. Gas Mask: while held, immune to "Poison Gas (毒气)" damage
-12. Rocket Launcher: each round's Action Phase, may target one room for a strike — at settlement, every player in that room loses 4 Health
-13. Dimensional Pocket: while held, no Weight (负重) limit
-14. Recycler: each round's Action Phase, may draw one item card from all item cards used up so far, up to your Weight limit
+12. Rocket Launcher: each round's Action Phase, may target one room for a strike; at settlement, every player in that room loses 4 Health
+13. Dimensional Pocket: while held, no Capacity (负重) limit
+14. Recycler: each round's Action Phase, may draw one item card from all item cards used up so far, up to your Capacity limit
 15. Junk: no effect
-16. Round 1 Airdrop Supply: counts as 2x Knife, takes 1 Weight
-17. Round 2 Airdrop Supply: counts as 2x Wine, takes 1 Weight
-18. Round 3 Airdrop Supply: counts as 1x Water + 1x Food, takes 1 Weight
+16. Round 1 Airdrop Supply: counts as 2x Knife, takes 1 Capacity
+17. Round 2 Airdrop Supply: counts as 2x Wine, takes 1 Capacity
+18. Round 3 Airdrop Supply: counts as 1x Water + 1x Food, takes 1 Capacity
 19. Round 4 Airdrop Supply: counts as 1x Pistol
 20. Round 5 Airdrop Supply: counts as 1x Adrenaline (肾上腺素)
 21. Round 6 Airdrop Supply: counts as 1x Pill`,
@@ -520,7 +520,7 @@ function rankingTableHtml(players, opts) {
       </tr>`;
   }).join("");
   const headers = en
-    ? ["Rank", "", "Player", "Health", "Power", "Speed", "Weight"]
+    ? ["Rank", "", "Player", "Health", "Power", "Speed", "Capacity"]
     : ["排名", "", "玩家", "生命", "武力", "速度", "负重"];
   return `
     <table class="stats-table ranking-table">
