@@ -22,6 +22,17 @@ const PHASE_TEXT = { setup: "等待创建游戏", prep: "准备阶段", in_progr
 let activeTab = "map";
 let latestState = null;
 
+// Map zoom for the public display — persisted so a screen left running
+// (e.g. on a TV/projector) keeps whatever size was last dialed in.
+const MAP_BASE_WIDTH = 820; // matches .public-map-view .map-img in shared.css
+const MAP_ZOOM_MIN = 0.5, MAP_ZOOM_MAX = 1.6, MAP_ZOOM_STEP = 0.1;
+let mapZoom = Number(localStorage.getItem("jbts_public_map_zoom")) || 1;
+
+function setMapZoom(z) {
+  mapZoom = Math.max(MAP_ZOOM_MIN, Math.min(MAP_ZOOM_MAX, Math.round(z * 10) / 10));
+  localStorage.setItem("jbts_public_map_zoom", mapZoom);
+}
+
 connectGameSocket((state) => {
   latestState = state;
   render();
@@ -87,14 +98,23 @@ function render() {
       </div>`;
   } else {
     // Poison damage reference only ever shows alongside the map, not on the other tabs.
-    body.innerHTML = `<div class="public-map-view"></div>`;
+    body.innerHTML = `
+      <div class="map-zoom-controls">
+        <button class="btn secondary" id="zoom-out" ${mapZoom <= MAP_ZOOM_MIN ? "disabled" : ""}>－</button>
+        <span class="map-zoom-label">${Math.round(mapZoom * 100)}%</span>
+        <button class="btn secondary" id="zoom-in" ${mapZoom >= MAP_ZOOM_MAX ? "disabled" : ""}>＋</button>
+      </div>
+      <div class="public-map-view"></div>`;
     const mapWrap = body.querySelector(".public-map-view");
     renderMap(mapWrap, state.poisonFloors);
+    mapWrap.querySelector(".map-img").style.width = Math.round(MAP_BASE_WIDTH * mapZoom) + "px";
     mapWrap.querySelectorAll(".room").forEach((el) => {
       el.style.cursor = "pointer";
       el.addEventListener("click", () => showRoomInfo(el.dataset.roomId));
     });
     renderPoisonInfoBox(body, state);
+    body.querySelector("#zoom-out").addEventListener("click", () => { setMapZoom(mapZoom - MAP_ZOOM_STEP); render(); });
+    body.querySelector("#zoom-in").addEventListener("click", () => { setMapZoom(mapZoom + MAP_ZOOM_STEP); render(); });
   }
 }
 

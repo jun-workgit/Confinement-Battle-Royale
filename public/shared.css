@@ -100,10 +100,15 @@ html, body {
 .map-img-wrap { position: relative; display: inline-block; max-width: 100%; }
 .map-img { display: block; max-width: 100%; width: 1600px; height: auto; border-radius: 4px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
 
-/* Public view only: a smaller map so the whole board fits in one desktop
-   viewport without vertical scrolling. Mobile is unaffected — min-width on
-   .map-wrap still forces horizontal scroll below this size either way. */
+/* Public view only: a smaller default map so the whole board fits in one
+   desktop viewport without vertical scrolling. Mobile is unaffected —
+   min-width on .map-wrap still forces horizontal scroll below this size
+   either way. The zoom controls below adjust this width further via JS. */
 .public-map-view .map-img { width: 820px; }
+
+.map-zoom-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.map-zoom-controls .btn { padding: 6px 14px; font-size: 14px; }
+.map-zoom-label { font-size: 13px; color: #c9ccd1; min-width: 42px; text-align: center; }
 
 .floor-overlay { position: absolute; left: 0; width: 100%; pointer-events: none; background: transparent; transition: background 0.2s ease; }
 .floor-overlay.poisoned {
