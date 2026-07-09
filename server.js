@@ -113,6 +113,16 @@ app.get("/healthz", (req, res) => {
   res.status(200).send("ok");
 });
 
+// Extension-less aliases so links can read "/admin" / "/public" instead of
+// "/admin.html" / "/public.html". The .html paths still work via the static
+// middleware below — these are just friendlier URLs on top of it.
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
+app.get("/public", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "public.html"));
+});
+
 app.post("/api/admin-login", (req, res) => {
   if (req.body && req.body.password === ADMIN_PASSWORD) {
     res.json({ ok: true });
