@@ -146,6 +146,43 @@ function startApp() {
     latestState = state;
     render();
   });
+  startTimerTicker(() => latestState && latestState.timer);
+}
+
+// Countdown timer controls. Minute/second inputs live in the DOM between
+// renders; they're only read when 设置 is clicked, and re-seeded from state on
+// each render (renders only happen on broadcasts, not on local ticks).
+function renderTimerTab(container, state) {
+  const timer = state.timer || { durationSec: 0, remainingSec: 0, running: false, endsAt: null };
+  const left = timerRemainingSec(timer);
+  const mins = Math.floor(timer.durationSec / 60);
+  const secs = timer.durationSec % 60;
+  container.innerHTML = `
+    <div class="card timer-card">
+      <div style="font-weight:700;font-size:16px;">倒计时（所有视图同步显示）</div>
+      <div class="timer-display" data-timer-clock>${formatTimerClock(left)}</div>
+      <div class="timer-controls">
+        <input type="number" id="timer-min" min="0" max="99" value="${mins}" ${timer.running ? "disabled" : ""}> 分
+        <input type="number" id="timer-sec" min="0" max="59" value="${secs}" ${timer.running ? "disabled" : ""}> 秒
+        <button class="btn secondary" id="timer-set-btn" ${timer.running ? "disabled" : ""}>设置</button>
+      </div>
+      <div class="timer-controls">
+        ${timer.running
+          ? `<button class="btn" id="timer-pause-btn">暂停</button>`
+          : `<button class="btn" id="timer-start-btn" ${left <= 0 ? "disabled" : ""}>开始</button>`}
+        <button class="btn secondary" id="timer-reset-btn" ${timer.durationSec <= 0 ? "disabled" : ""}>重置</button>
+      </div>
+    </div>`;
+  container.querySelector("#timer-set-btn").addEventListener("click", () => {
+    const m = Math.max(0, Math.min(99, Math.round(Number(container.querySelector("#timer-min").value) || 0)));
+    const s = Math.max(0, Math.min(59, Math.round(Number(container.querySelector("#timer-sec").value) || 0)));
+    socket.send({ type: "admin:setTimer", durationSec: m * 60 + s, password: adminPassword });
+  });
+  const startBtn = container.querySelector("#timer-start-btn");
+  if (startBtn) startBtn.addEventListener("click", () => socket.send({ type: "admin:startTimer", password: adminPassword }));
+  const pauseBtn = container.querySelector("#timer-pause-btn");
+  if (pauseBtn) pauseBtn.addEventListener("click", () => socket.send({ type: "admin:pauseTimer", password: adminPassword }));
+  container.querySelector("#timer-reset-btn").addEventListener("click", () => socket.send({ type: "admin:resetTimer", password: adminPassword }));
 }
 
 function render() {
@@ -298,6 +335,7 @@ function renderDashboard(state) {
           <div class="tab ${adminTab === "poison" ? "active" : ""}" id="admin-tab-poison">毒气伤害</div>
           <div class="tab ${adminTab === "ranking" ? "active" : ""}" id="admin-tab-ranking">排行榜</div>
           <div class="tab ${adminTab === "rules" ? "active" : ""}" id="admin-tab-rules">游戏规则</div>
+          <div class="tab ${adminTab === "timer" ? "active" : ""}" id="admin-tab-timer">计时器</div>
         </div>
         ${isEditing
           ? `<button class="btn secondary" id="import-btn" style="padding:6px 14px;font-size:12px;">导入体测数据</button>
@@ -322,6 +360,7 @@ function renderDashboard(state) {
   panel.querySelector("#admin-tab-poison").addEventListener("click", () => { adminTab = "poison"; render(); });
   panel.querySelector("#admin-tab-ranking").addEventListener("click", () => { adminTab = "ranking"; render(); });
   panel.querySelector("#admin-tab-rules").addEventListener("click", () => { adminTab = "rules"; render(); });
+  panel.querySelector("#admin-tab-timer").addEventListener("click", () => { adminTab = "timer"; render(); });
 
   if (isEditing && isProgress) {
     panel.querySelector("#round-input").addEventListener("input", (e) => {
@@ -412,6 +451,8 @@ function renderDashboard(state) {
       </div>`;
   } else if (adminTab === "rules") {
     renderGameRules(tabBody, state);
+  } else if (adminTab === "timer") {
+    renderTimerTab(tabBody, state);
   }
 
   if (isEditing) {

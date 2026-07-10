@@ -27,6 +27,8 @@ const UI_TEXT = {
   tabPoison: ["毒气伤害", "Poison Damage (毒气)"],
   tabRanking: ["排行榜", "Ranking"],
   tabRules: ["游戏规则", "Rules"],
+  tabTimer: ["计时器", "Timer"],
+  timerTitle: ["倒计时", "Countdown"],
   currentCharacter: ["当前角色：", "Current character: "],
   switchCharacter: ["切换角色", "Switch Character"],
   switchPasswordPrompt: ["需要管理员密码才能切换角色", "Admin password required to switch character"],
@@ -68,6 +70,7 @@ const UI_TEXT = {
   hackerMarkedPrefix: ["本轮已选择：", "This round: "],
   hackerConfirmPrefix: ["确定要秘密关闭「", "Secretly disable "],
   hackerConfirmSuffix: ["」的房间功能吗？本回合内无法更改。", "'s room function? This can't be changed for the rest of this round."],
+  hackerRestrictedPrefix: ["本轮不可选择：", "Not available this round: "],
 };
 
 function t(key) {

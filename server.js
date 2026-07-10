@@ -40,7 +40,38 @@ function defaultState() {
     // Visible only to the Hacker player themselves and to admin (never to
     // other players or the public view) — see index.html/admin.html.
     hackerRoomMark: null,
+    // Admin-controlled countdown shown on every view. `endsAt` is an absolute
+    // ms-epoch timestamp so all clients (and a restarted server) agree on the
+    // remaining time; `remainingSec` is only authoritative while not running.
+    timer: defaultTimer(),
   };
+}
+
+function defaultTimer() {
+  return { durationSec: 0, remainingSec: 0, running: false, endsAt: null };
+}
+
+const TIMER_MAX_SEC = 99 * 60 + 59;
+
+// While the countdown runs, clients tick locally off endsAt; the server only
+// needs to wake once at expiry to flip the state back to stopped so late
+// joiners don't see a stale "running" timer.
+let timerExpiryTimeout = null;
+function armTimerExpiry() {
+  clearTimeout(timerExpiryTimeout);
+  if (!state.timer || !state.timer.running || !state.timer.endsAt) return;
+  const delay = state.timer.endsAt - Date.now();
+  if (delay <= 0) {
+    state.timer = { ...state.timer, running: false, remainingSec: 0, endsAt: null };
+    return;
+  }
+  timerExpiryTimeout = setTimeout(() => {
+    if (state.timer && state.timer.running) {
+      state.timer = { ...state.timer, running: false, remainingSec: 0, endsAt: null };
+      broadcast();
+      saveState();
+    }
+  }, delay + 50);
 }
 
 // Only known role ids survive, de-duplicated, in the given order.
@@ -79,6 +110,9 @@ function loadState() {
 }
 
 let state = loadState();
+// A timer that was running when the server went down keeps its absolute
+// endsAt, so it either resumes cleanly or gets finalized as expired here.
+armTimerExpiry();
 let saveTimer = null;
 function saveState() {
   clearTimeout(saveTimer);
@@ -233,6 +267,7 @@ wss.on("connection", (ws) => {
           selectedRoles: state.selectedRoles,
           rolesVisibleToPlayers: state.rolesVisibleToPlayers,
           hackerRoomMark: null,
+          timer: state.timer,
         };
         break;
       }
@@ -287,6 +322,7 @@ wss.on("connection", (ws) => {
       }
       case "admin:restartGame": {
         state = defaultState();
+        armTimerExpiry();
         break;
       }
       // Single atomic commit for everything the admin edits together (per-player
@@ -344,7 +380,9 @@ wss.on("connection", (ws) => {
       }
       // Hacker's "秘密关闭1个房间功能" — one pick per round, locked once set
       // for the current round (a mark left over from an earlier round is
-      // stale and doesn't block a new one).
+      // stale and doesn't block a new one), and can't repeat whichever room
+      // was picked in the immediately preceding round specifically (round-2
+      // or earlier is fair game again, even if it was picked back then).
       case "user:setHackerRoomMark": {
         if (state.phase !== "in_progress") return;
         const playerId = Math.round(Number(msg.playerId));
@@ -352,7 +390,37 @@ wss.on("connection", (ws) => {
         if (!player || player.roleId !== "hacker") return;
         if (!ROOM_IDS.has(msg.room)) return;
         if (state.hackerRoomMark && state.hackerRoomMark.round === state.round) return;
+        if (state.hackerRoomMark && state.hackerRoomMark.round === state.round - 1 && state.hackerRoomMark.room === msg.room) return;
         state.hackerRoomMark = { round: state.round, room: msg.room };
+        break;
+      }
+      // Countdown timer — deliberately phase-independent so the admin can run
+      // it during prep, in-game, or between games.
+      case "admin:setTimer": {
+        const sec = Math.max(0, Math.min(TIMER_MAX_SEC, Math.round(Number(msg.durationSec) || 0)));
+        state.timer = { durationSec: sec, remainingSec: sec, running: false, endsAt: null };
+        armTimerExpiry();
+        break;
+      }
+      case "admin:startTimer": {
+        const tm = state.timer || defaultTimer();
+        if (tm.running || tm.remainingSec <= 0) return;
+        state.timer = { ...tm, running: true, endsAt: Date.now() + tm.remainingSec * 1000 };
+        armTimerExpiry();
+        break;
+      }
+      case "admin:pauseTimer": {
+        const tm = state.timer;
+        if (!tm || !tm.running || !tm.endsAt) return;
+        const left = Math.max(0, Math.ceil((tm.endsAt - Date.now()) / 1000));
+        state.timer = { ...tm, running: false, remainingSec: left, endsAt: null };
+        armTimerExpiry();
+        break;
+      }
+      case "admin:resetTimer": {
+        const tm = state.timer || defaultTimer();
+        state.timer = { durationSec: tm.durationSec, remainingSec: tm.durationSec, running: false, endsAt: null };
+        armTimerExpiry();
         break;
       }
       default:

@@ -332,6 +332,45 @@ html, body {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.4); }
 }
+/* The one room the Hacker can't repeat this round (picked last round). */
+.room.room-hacker-restricted {
+  cursor: not-allowed; opacity: 0.45;
+  border: 2px dashed #8b9482; background: rgba(0,0,0,0.35);
+}
+.hacker-restricted-note { color: #8b9482; font-size: 12px; }
+
+/* Admin-controlled countdown timer (timer tab on admin/player, header badge
+   on the public view). The display element's text is re-written every tick
+   by a small interval, not by a full re-render. */
+.timer-card { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 30px 20px; }
+.timer-display {
+  font-size: 72px; font-weight: 800; letter-spacing: 4px;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.timer-display.running { color: #7fd08a; }
+.timer-display.expired { color: #e05656; }
+.timer-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.timer-controls input[type="number"] {
+  width: 64px; padding: 8px; font-size: 16px; text-align: center;
+  background: rgba(0,0,0,0.3); color: inherit;
+  border: 1px solid #565d52; border-radius: 6px;
+}
+.timer-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 999px;
+  background: rgba(0,0,0,0.35); border: 1px solid #565d52;
+  font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.timer-badge .running { color: #7fd08a; }
+.timer-badge .expired { color: #e05656; }
+/* Public view's dedicated timer tab: fill the whole panel body so the clock
+   reads from across the room (TV/projector). Font scales with the viewport. */
+.timer-fullpage {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 24px; min-height: 60vh;
+}
+.timer-fullpage-title { font-size: clamp(20px, 4vw, 36px); font-weight: 700; color: #c9ccd1; }
+.timer-display-huge { font-size: clamp(90px, 22vw, 320px); letter-spacing: 0.05em; }
 
 /* Game Rules "(八) 职业介绍": one image-left/text-right card per role. */
 /* .rules-box (shared with the plain-text sections) sets white-space:pre-line

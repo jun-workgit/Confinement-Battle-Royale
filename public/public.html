@@ -85,6 +85,7 @@ connectGameSocket((state) => {
   latestState = state;
   render();
 });
+startTimerTicker(() => latestState && latestState.timer);
 
 function render() {
   const state = latestState;
@@ -110,11 +111,15 @@ function render() {
       <span class="panel-title">禁闭逃杀</span>
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
         <span class="round-badge">第 <span class="round-number">${state.round}</span> 回合</span>
+        ${state.timer && state.timer.durationSec > 0
+          ? `<span class="timer-badge" id="header-timer-badge" title="点击查看全屏倒计时">⏱ <span data-timer-clock>${formatTimerClock(timerRemainingSec(state.timer))}</span></span>`
+          : ""}
         <div class="tabs">
           <div class="tab ${activeTab === "map" ? "active" : ""}" id="tab-map">地图</div>
           <div class="tab ${activeTab === "ranking" ? "active" : ""}" id="tab-ranking">排行榜</div>
           <div class="tab ${activeTab === "rules" ? "active" : ""}" id="tab-rules">游戏规则</div>
           <div class="tab ${activeTab === "video" ? "active" : ""}" id="tab-video">视频</div>
+          <div class="tab ${activeTab === "timer" ? "active" : ""}" id="tab-timer">计时器</div>
         </div>
         <span style="font-size:13px;color:#c9ccd1;">
           <span class="status-dot ${state.phase === "setup" ? "off" : "on"}"></span>${PHASE_TEXT[state.phase] || ""}${state.playerCount ? " · " + state.playerCount + " 名玩家" : ""}
@@ -127,6 +132,12 @@ function render() {
   panel.querySelector("#tab-ranking").addEventListener("click", () => { activeTab = "ranking"; render(); });
   panel.querySelector("#tab-rules").addEventListener("click", () => { activeTab = "rules"; render(); });
   panel.querySelector("#tab-video").addEventListener("click", () => { activeTab = "video"; render(); });
+  panel.querySelector("#tab-timer").addEventListener("click", () => { activeTab = "timer"; render(); });
+  const headerBadge = panel.querySelector("#header-timer-badge");
+  if (headerBadge) {
+    headerBadge.style.cursor = "pointer";
+    headerBadge.addEventListener("click", () => { activeTab = "timer"; render(); });
+  }
 
   const body = panel.querySelector("#body");
   if (activeTab === "ranking") {
@@ -137,6 +148,12 @@ function render() {
       </div>`;
   } else if (activeTab === "rules") {
     renderGameRules(body, state);
+  } else if (activeTab === "timer") {
+    body.innerHTML = `
+      <div class="timer-fullpage">
+        <div class="timer-fullpage-title">倒计时</div>
+        <div class="timer-display timer-display-huge" data-timer-clock>${formatTimerClock(timerRemainingSec(state.timer))}</div>
+      </div>`;
   } else if (activeTab === "video") {
     body.innerHTML = `
       <div class="video-wrap">
