@@ -25,6 +25,7 @@ const LS_KEY = "jbts_player_id";
 let activeTab = "stats";
 let latestState = null;
 let selectingSpawn = false;
+let selectingHackerRoom = false;
 
 panel.querySelector(".big").textContent = t("loading");
 
@@ -198,6 +199,10 @@ function renderMapTab(container, state, player) {
   const isPrep = state.phase === "prep";
   const spawnLabel = player.room ? getRoomLabel(player.room, lang) : t("notChosen");
 
+  const isHacker = player.roleId === "hacker";
+  const hackerMark = state.hackerRoomMark && state.hackerRoomMark.round === state.round ? state.hackerRoomMark : null;
+  const showHackerBar = isHacker && state.phase === "in_progress";
+
   container.innerHTML = `
     ${isPrep ? `
     <div class="spawn-bar">
@@ -205,6 +210,15 @@ function renderMapTab(container, state, player) {
       <button class="btn secondary" id="spawn-btn" style="padding:6px 14px;font-size:12px;">
         ${selectingSpawn ? t("cancelSelect") : (player.room ? t("reselectSpawn") : t("chooseSpawn"))}
       </button>
+    </div>` : ""}
+    ${showHackerBar ? `
+    <div class="spawn-bar">
+      ${hackerMark
+        ? `<span>${t("hackerMarkedPrefix")}<b>${getRoomLabel(hackerMark.room, lang)}</b></span>`
+        : `<span>${t("hackerActionTitle")}</span>
+           <button class="btn secondary" id="hacker-pick-btn" style="padding:6px 14px;font-size:12px;">
+             ${selectingHackerRoom ? t("cancelSelect") : t("hackerPickHint")}
+           </button>`}
     </div>` : ""}
     <div id="map-el"></div>
   `;
@@ -215,8 +229,14 @@ function renderMapTab(container, state, player) {
   renderMeeples(mapEl.querySelector(".map-img-wrap"), state.players.filter((p) => p.id === player.id));
 
   const inSpawnPick = isPrep && selectingSpawn;
+  const inHackerPick = showHackerBar && !hackerMark && selectingHackerRoom;
   mapEl.querySelectorAll(".room").forEach((el) => {
     const roomId = el.dataset.roomId;
+    // The mark is only ever shown to the Hacker themselves — no other
+    // player or the public view has any idea a room was picked.
+    if (isHacker && hackerMark && roomId === hackerMark.room) {
+      el.classList.add("room-hacker-marked");
+    }
     if (inSpawnPick && SPAWN_ROOM_IDS.includes(roomId)) {
       el.classList.add("spawn-selectable");
       el.addEventListener("click", () => {
@@ -224,17 +244,35 @@ function renderMapTab(container, state, player) {
         selectingSpawn = false;
         render();
       });
-    } else if (!inSpawnPick) {
+    } else if (inHackerPick) {
+      el.classList.add("room-hacker-selectable");
+      el.addEventListener("click", () => {
+        const label = getRoomLabel(roomId, lang);
+        if (confirm(`${t("hackerConfirmPrefix")}${label}${t("hackerConfirmSuffix")}`)) {
+          socket.send({ type: "user:setHackerRoomMark", playerId: player.id, room: roomId });
+          selectingHackerRoom = false;
+          render();
+        }
+      });
+    } else if (!inSpawnPick && !inHackerPick) {
       el.style.cursor = "pointer";
       el.addEventListener("click", () => showRoomInfo(roomId, lang));
     }
   });
 
-  if (!isPrep) return;
-  container.querySelector("#spawn-btn").addEventListener("click", () => {
-    selectingSpawn = !selectingSpawn;
-    render();
-  });
+  if (isPrep) {
+    container.querySelector("#spawn-btn").addEventListener("click", () => {
+      selectingSpawn = !selectingSpawn;
+      render();
+    });
+  }
+  const hackerPickBtn = container.querySelector("#hacker-pick-btn");
+  if (hackerPickBtn) {
+    hackerPickBtn.addEventListener("click", () => {
+      selectingHackerRoom = !selectingHackerRoom;
+      render();
+    });
+  }
 }
 
 // Below the portrait image: a normal health bar while alive, or a purple
@@ -267,6 +305,22 @@ function objectiveBoxHtml() {
     </div>`;
 }
 
+// Hacker-only action, shown in the top-right corner of the role card during
+// active rounds: a button to secretly disable a room's function (jumps to
+// the Map tab and enters pick mode), or — once committed for this round —
+// a locked readout of the chosen room. Nobody else ever sees this, not even
+// other players with roles visible, since it reads the viewer's own player.
+function hackerRoleActionHtml(player) {
+  const state = latestState;
+  if (!state || player.roleId !== "hacker" || state.phase !== "in_progress") return "";
+  const lang = getLang();
+  const mark = state.hackerRoomMark && state.hackerRoomMark.round === state.round ? state.hackerRoomMark : null;
+  if (mark) {
+    return `<div class="role-card-action marked">${t("hackerMarkedPrefix")}<b>${getRoomLabel(mark.room, lang)}</b></div>`;
+  }
+  return `<button class="role-card-action btn secondary" id="role-hacker-btn">${t("hackerActionTitle")}</button>`;
+}
+
 // A player can always see their own assigned role — the admin's
 // rolesVisibleToPlayers toggle only controls the "(八) 职业介绍" reference
 // list on the Rules tab, not this per-player card.
@@ -280,6 +334,7 @@ function roleCardHtml(player) {
   const desc = lang === "en" ? role.descriptionEn : role.description;
   return `
     <div class="role-card">
+      ${hackerRoleActionHtml(player)}
       <img class="role-card-img" src="${role.image}" alt="${name}">
       <div class="role-card-body">
         <div class="role-card-title">${t("roleSectionTitle")}</div>
@@ -340,6 +395,15 @@ function renderStatsEditor(container, player) {
       renderStatsEditor(container, player);
     });
   });
+
+  const hackerBtnEditor = container.querySelector("#role-hacker-btn");
+  if (hackerBtnEditor) {
+    hackerBtnEditor.addEventListener("click", () => {
+      activeTab = "map";
+      selectingHackerRoom = true;
+      render();
+    });
+  }
 }
 
 function renderStatsReadonly(container, player) {
@@ -372,6 +436,15 @@ function renderStatsReadonly(container, player) {
     ${objectiveBoxHtml()}
     ${roleCardHtml(player)}
   `;
+
+  const hackerBtn = container.querySelector("#role-hacker-btn");
+  if (hackerBtn) {
+    hackerBtn.addEventListener("click", () => {
+      activeTab = "map";
+      selectingHackerRoom = true;
+      render();
+    });
+  }
 }
 
 function renderEnded(state, player) {

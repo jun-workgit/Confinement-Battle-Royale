@@ -362,6 +362,7 @@ function renderDashboard(state) {
     renderMap(spawnMapEl, [], false);
     renderMeeples(spawnMapEl.querySelector(".map-img-wrap"), state.players);
   } else if (adminTab === "map" && isProgress) {
+    const hackerMark = state.hackerRoomMark && state.hackerRoomMark.round === state.round ? state.hackerRoomMark : null;
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:16px;margin-bottom:4px;">楼层中毒 / 玩家位置</div>
@@ -369,6 +370,7 @@ function renderDashboard(state) {
           ${isEditing ? "点击左侧楼层标签以激活/解除该层中毒（需点击“确认”生效）" : "点击上方“编辑”以修改中毒楼层"}
           · 拖动玩家图标到房间中标记位置（立即生效，拖回下方框内可移除）
         </div>
+        ${hackerMark ? `<div style="font-size:13px;color:#ff8a80;margin-bottom:12px;">黑客本轮秘密关闭：<b>${getRoomLabel(hackerMark.room)}</b>（仅黑客本人与管理员可见）</div>` : ""}
         <div id="meeple-tray" class="meeple-tray"></div>
         <div id="poison-map"></div>
       </div>`;
@@ -384,6 +386,10 @@ function renderDashboard(state) {
           render();
         });
       });
+    }
+    if (hackerMark) {
+      const markedEl = poisonMapEl.querySelector(`.room[data-room-id="${hackerMark.room}"]`);
+      if (markedEl) markedEl.classList.add("room-hacker-marked");
     }
     renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
     renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);

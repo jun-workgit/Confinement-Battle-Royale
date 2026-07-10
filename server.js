@@ -34,6 +34,12 @@ function defaultState() {
     rolesEnabled: false,
     selectedRoles: [],
     rolesVisibleToPlayers: true,
+    // The Hacker role's "秘密关闭1个房间功能" pick for the current round —
+    // { round, room } or null. Only meaningful when .round === state.round;
+    // a mark from an earlier round is stale and no longer blocks a new pick.
+    // Visible only to the Hacker player themselves and to admin (never to
+    // other players or the public view) — see index.html/admin.html.
+    hackerRoomMark: null,
   };
 }
 
@@ -226,6 +232,7 @@ wss.on("connection", (ws) => {
           rolesEnabled: state.rolesEnabled,
           selectedRoles: state.selectedRoles,
           rolesVisibleToPlayers: state.rolesVisibleToPlayers,
+          hackerRoomMark: null,
         };
         break;
       }
@@ -333,6 +340,19 @@ wss.on("connection", (ws) => {
         const player = state.players.find((p) => p.id === playerId);
         if (!player) return;
         player.stats = clampPlayerStats(msg.stats);
+        break;
+      }
+      // Hacker's "秘密关闭1个房间功能" — one pick per round, locked once set
+      // for the current round (a mark left over from an earlier round is
+      // stale and doesn't block a new one).
+      case "user:setHackerRoomMark": {
+        if (state.phase !== "in_progress") return;
+        const playerId = Math.round(Number(msg.playerId));
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player || player.roleId !== "hacker") return;
+        if (!ROOM_IDS.has(msg.room)) return;
+        if (state.hackerRoomMark && state.hackerRoomMark.round === state.round) return;
+        state.hackerRoomMark = { round: state.round, room: msg.room };
         break;
       }
       default:

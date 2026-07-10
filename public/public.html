@@ -34,7 +34,54 @@ function setMapZoom(z) {
   localStorage.setItem("jbts_public_map_zoom", mapZoom);
 }
 
+// --- Sound: public view only. Looping BGM plus a one-shot cue whenever the
+// poisoned-floor set changes. Browsers block unmuted autoplay until a user
+// gesture, so both tracks start muted-but-playing (muted autoplay is always
+// allowed) and the mute toggle's own click is what unlocks real sound —
+// after that, later one-shot plays are allowed too. Preference persists so
+// a screen left running keeps whatever the last visitor chose.
+const bgmAudio = new Audio("/assets/BGM.mp3");
+bgmAudio.loop = true;
+const poisonAudio = new Audio("/assets/Poison%20Gas.mp3");
+let soundMuted = localStorage.getItem("jbts_public_muted") !== "0"; // muted by default until unmuted once
+let lastPoisonFloorsKey; // undefined until the first state arrives — avoids firing on initial load
+
+function applySoundMuted() {
+  bgmAudio.muted = soundMuted;
+  poisonAudio.muted = soundMuted;
+  localStorage.setItem("jbts_public_muted", soundMuted ? "1" : "0");
+}
+applySoundMuted();
+bgmAudio.play().catch(() => {});
+
+function toggleSoundMuted() {
+  soundMuted = !soundMuted;
+  applySoundMuted();
+  if (!soundMuted) bgmAudio.play().catch(() => {});
+  renderSoundToggle();
+}
+
+function renderSoundToggle() {
+  const btn = document.getElementById("sound-toggle-btn");
+  if (btn) btn.textContent = soundMuted ? "🔇 静音" : "🔊 音效";
+}
+
+// Created once, outside the tab-driven panel re-renders, so it (and the
+// audio elements above) persist across every tab switch.
+const soundToggleBox = document.createElement("div");
+soundToggleBox.className = "sound-toggle-box";
+soundToggleBox.innerHTML = `<button class="btn secondary" id="sound-toggle-btn"></button>`;
+document.body.appendChild(soundToggleBox);
+renderSoundToggle();
+soundToggleBox.querySelector("#sound-toggle-btn").addEventListener("click", toggleSoundMuted);
+
 connectGameSocket((state) => {
+  const poisonKey = JSON.stringify(state.poisonFloors || []);
+  if (lastPoisonFloorsKey !== undefined && poisonKey !== lastPoisonFloorsKey) {
+    poisonAudio.currentTime = 0;
+    poisonAudio.play().catch(() => {});
+  }
+  lastPoisonFloorsKey = poisonKey;
   latestState = state;
   render();
 });

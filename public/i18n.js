@@ -63,6 +63,11 @@ const UI_TEXT = {
   roleSectionTitle: ["职业", "Role"],
   gameOverRanking: ["游戏结束 · 排行榜", "Game Over · Ranking"],
   close: ["关闭", "Close"],
+  hackerActionTitle: ["秘密关闭1个房间功能", "Secretly Disable a Room's Function"],
+  hackerPickHint: ["选择要秘密关闭的房间", "Choose a room to secretly disable"],
+  hackerMarkedPrefix: ["本轮已选择：", "This round: "],
+  hackerConfirmPrefix: ["确定要秘密关闭「", "Secretly disable "],
+  hackerConfirmSuffix: ["」的房间功能吗？本回合内无法更改。", "'s room function? This can't be changed for the rest of this round."],
 };
 
 function t(key) {

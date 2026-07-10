@@ -115,6 +115,16 @@ html, body {
 .map-zoom-controls .btn { padding: 2px 8px; font-size: 12px; }
 .map-zoom-label { font-size: 11px; color: #c9ccd1; min-width: 30px; text-align: center; }
 
+/* Public view only, stacked directly above .map-zoom-controls. Created once
+   at load (not per-tab), so it stays put across every tab switch. */
+.sound-toggle-box {
+  position: fixed; bottom: 56px; left: 16px; z-index: 500;
+  background: rgba(18,18,20,0.92); border: 1px solid rgba(214,218,224,0.3); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+  padding: 5px 8px;
+}
+.sound-toggle-box .btn { padding: 4px 10px; font-size: 12px; }
+
 .floor-overlay { position: absolute; left: 0; width: 100%; pointer-events: none; background: transparent; transition: background 0.2s ease; }
 .floor-overlay.poisoned {
   background: repeating-linear-gradient(115deg, rgba(122, 47, 176, 0.32) 0px, rgba(122, 47, 176, 0.32) 10px, rgba(180, 108, 240, 0.18) 10px, rgba(180, 108, 240, 0.18) 20px);
@@ -280,6 +290,7 @@ html, body {
 
 /* Player's own role card (index.html), shown below the objective box. */
 .role-card {
+  position: relative;
   margin-top: 20px; display: flex; gap: 18px; align-items: flex-start;
   padding: 16px 18px; background: rgba(0,0,0,0.2);
   border: 1px solid rgba(216,178,88,0.35); border-radius: 8px;
@@ -292,6 +303,29 @@ html, body {
 .role-card-skill { font-weight: 700; font-size: 13px; color: #eef0f2; margin-bottom: 8px; }
 .role-card-desc-line { font-size: 13px; line-height: 1.55; color: #c9ccd1; margin-bottom: 3px; }
 .role-card-desc-line:last-child { margin-bottom: 0; }
+
+/* Hacker-only "秘密关闭1个房间功能" control, pinned to the card's corner. */
+.role-card-action {
+  position: absolute; top: 14px; right: 16px;
+  font-size: 11px; padding: 6px 12px; max-width: 45%; text-align: right;
+}
+.role-card-action.marked { color: #c9ccd1; background: rgba(0,0,0,0.25); border-radius: 6px; border: 1px solid rgba(214,218,224,0.2); }
+.role-card-action.marked b { color: #ff8a80; display: block; }
+
+/* Map room states for the Hacker's room-disable pick — red-toned so it
+   reads as "block/disable", distinct from the gold spawn-pick pulse and
+   the purple poison overlay. */
+.room.room-hacker-selectable {
+  cursor: pointer; border-color: #ff8a80;
+  animation: hacker-pick-pulse 1.2s ease-in-out infinite;
+}
+@keyframes hacker-pick-pulse {
+  0%, 100% { background: rgba(214,40,57,0.15); }
+  50% { background: rgba(214,40,57,0.5); }
+}
+.room.room-hacker-marked {
+  border: 2px solid #ff8a80; box-shadow: 0 0 0 2px rgba(214,40,57,0.35);
+}
 
 /* Game Rules "(八) 职业介绍": one image-left/text-right card per role. */
 /* .rules-box (shared with the plain-text sections) sets white-space:pre-line
