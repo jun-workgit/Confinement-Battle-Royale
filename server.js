@@ -204,12 +204,19 @@ wss.on("connection", (ws) => {
         };
         break;
       }
+      // Covers the whole "职业设置" block on the setup screen in one message:
+      // enabled, the chosen pool, and whether players get to see their own
+      // role card at all (public/admin views always show assignments either
+      // way, so this only affects index.html).
       case "admin:setRoleConfig": {
         if (state.phase !== "setup") return;
         state.rolesEnabled = !!msg.enabled;
         state.selectedRoles = clampSelectedRoles(msg.roleIds);
+        if (msg.visible !== undefined) state.rolesVisibleToPlayers = !!msg.visible;
         break;
       }
+      // Assigned inline from the admin player table (like room/health), not
+      // part of the batched edit/commit flow — takes effect immediately.
       case "admin:assignPlayerRole": {
         if (state.phase !== "prep" && state.phase !== "in_progress") return;
         if (!state.rolesEnabled) return;
@@ -226,11 +233,6 @@ wss.on("connection", (ws) => {
           }
         }
         player.roleId = roleId;
-        break;
-      }
-      case "admin:setRolesVisibleToPlayers": {
-        if (state.phase !== "prep" && state.phase !== "in_progress") return;
-        state.rolesVisibleToPlayers = !!msg.visible;
         break;
       }
       case "admin:setPoisonDamageTable": {

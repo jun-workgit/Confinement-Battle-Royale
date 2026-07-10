@@ -401,6 +401,16 @@ If any player's Health drops to 0 during any settlement step, they are publicly 
 20. Round 5 Airdrop Supply: counts as 1x Adrenaline (肾上腺素)
 21. Round 6 Airdrop Supply: counts as 1x Pill`,
   },
+  {
+    id: "roles",
+    title: "(八) 职业介绍",
+    titleEn: "(8) Roles (职业)",
+    // Built at render time from ROLES (roles-data.js, loaded before this
+    // script) instead of duplicated here, so this reference can't drift out
+    // of sync with the actual role definitions.
+    text: "{{ROLES_LIST}}",
+    textEn: "{{ROLES_LIST}}",
+  },
 ];
 
 let activeRulesSection = GAME_RULES_SECTIONS[0].id;
@@ -450,24 +460,46 @@ function formatPoisonScheduleTextEn(table) {
   return text ? text + "." : "";
 }
 
+// Renders the "(八) 职业介绍" reference list from the global ROLES (defined in
+// roles-data.js). Only ever called in-browser (never from server.js), so the
+// global being provided by script load order rather than a require is safe.
+function buildRolesRulesText(lang) {
+  if (typeof ROLES === "undefined" || !ROLES.length) {
+    return lang === "en" ? "No roles are defined." : "暂无职业数据。";
+  }
+  const en = lang === "en";
+  return ROLES.map((r) => {
+    const name = en ? r.nameEn : r.name;
+    const skill = en ? r.skillEn : r.skill;
+    const desc = en ? r.descriptionEn : r.description;
+    return `${name} - ${skill}\n${desc}`;
+  }).join("\n\n");
+}
+
 // `state` is optional so the rules can still render before a game exists;
 // falls back to the default table/round count in that case. `lang` defaults
-// to Chinese so public/admin callers are unaffected.
-function renderGameRules(container, state, lang) {
+// to Chinese so public/admin callers are unaffected. `opts.hideRolesSection`
+// drops the "(八) 职业介绍" tab entirely — used by the player view when the
+// admin has turned off role visibility for players; public/admin views never
+// pass this, so they always see it regardless of that toggle.
+function renderGameRules(container, state, lang, opts) {
+  opts = opts || {};
   const en = lang === "en";
   const table = state && state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
   const totalRounds = table.length ? Math.max(...table.map((r) => r.round)) : 6;
   const poisonSchedule = en ? formatPoisonScheduleTextEn(table) : formatPoisonScheduleText(table);
 
-  const current = GAME_RULES_SECTIONS.find((s) => s.id === activeRulesSection) || GAME_RULES_SECTIONS[0];
+  const sections = opts.hideRolesSection ? GAME_RULES_SECTIONS.filter((s) => s.id !== "roles") : GAME_RULES_SECTIONS;
+  const current = sections.find((s) => s.id === activeRulesSection) || sections[0];
   const text = (en ? current.textEn : current.text)
     .split("{{TOTAL_ROUNDS}}").join(String(totalRounds))
-    .split("{{POISON_SCHEDULE}}").join(poisonSchedule);
+    .split("{{POISON_SCHEDULE}}").join(poisonSchedule)
+    .split("{{ROLES_LIST}}").join(buildRolesRulesText(en ? "en" : "zh"));
 
   container.innerHTML = `
     <div class="card rules-card">
       <div class="rules-tabs">
-        ${GAME_RULES_SECTIONS.map((s) => `<div class="rules-tab ${s.id === current.id ? "active" : ""}" data-rules-section="${s.id}">${en ? s.titleEn : s.title}</div>`).join("")}
+        ${sections.map((s) => `<div class="rules-tab ${s.id === current.id ? "active" : ""}" data-rules-section="${s.id}">${en ? s.titleEn : s.title}</div>`).join("")}
       </div>
       <div class="rules-box">${text}</div>
     </div>
@@ -475,7 +507,7 @@ function renderGameRules(container, state, lang) {
   container.querySelectorAll("[data-rules-section]").forEach((el) => {
     el.addEventListener("click", () => {
       activeRulesSection = el.dataset.rulesSection;
-      renderGameRules(container, state, lang);
+      renderGameRules(container, state, lang, opts);
     });
   });
 }

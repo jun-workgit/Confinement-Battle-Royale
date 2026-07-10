@@ -171,7 +171,7 @@ function render() {
         <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player.id, lang })}</div>
       </div>`;
   } else if (activeTab === "rules") {
-    renderGameRules(body, state, lang);
+    renderGameRules(body, state, lang, { hideRolesSection: !(state.rolesEnabled && state.rolesVisibleToPlayers) });
   } else if (state.phase === "prep") {
     renderStatsEditor(body, player);
   } else {
@@ -267,11 +267,11 @@ function objectiveBoxHtml() {
     </div>`;
 }
 
-// Shown only to the player themselves, and only when the admin has both
-// enabled roles for this game and left them visible to players.
+// A player can always see their own assigned role — the admin's
+// rolesVisibleToPlayers toggle only controls the "(八) 职业介绍" reference
+// list on the Rules tab, not this per-player card.
 function roleCardHtml(player) {
-  const state = latestState;
-  if (!state || !state.rolesEnabled || !state.rolesVisibleToPlayers || !player.roleId) return "";
+  if (!player.roleId) return "";
   const role = getRole(player.roleId);
   if (!role) return "";
   const lang = getLang();

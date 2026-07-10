@@ -159,9 +159,13 @@ function renderSetup(state) {
           启用职业模式
         </label>
         <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
-          启用后需选择与玩家人数相同数量的职业，游戏开始后可在"职业分配"标签页中为每位玩家指定职业。仅可在创建游戏前修改。
+          启用后需选择与玩家人数相同数量的职业，游戏开始后可在"玩家属性"表格中为每位玩家指定职业。仅可在创建游戏前修改。
         </div>
         ${state.rolesEnabled ? `
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#c9ccd1;margin-bottom:12px;cursor:pointer;">
+            <input type="checkbox" id="roles-visible-toggle" ${state.rolesVisibleToPlayers ? "checked" : ""}>
+            向玩家展示职业信息（关闭则仅公共视图和管理员可见；玩家始终能看到自己被分配的职业）
+          </label>
           <div style="font-size:13px;margin-bottom:10px;">
             已选择 <span id="role-count-label" style="color:#d8b258;font-weight:700;">${selectedRoles.length}</span> /
             <span id="role-need-label" style="color:#d8b258;font-weight:700;">6</span> 个职业（需与玩家人数一致）
@@ -208,13 +212,19 @@ function renderSetup(state) {
   });
 
   panel.querySelector("#roles-enabled-toggle").addEventListener("change", (e) => {
-    socket.send({ type: "admin:setRoleConfig", enabled: e.target.checked, roleIds: selectedRoles, password: adminPassword });
+    socket.send({ type: "admin:setRoleConfig", enabled: e.target.checked, roleIds: selectedRoles, visible: state.rolesVisibleToPlayers, password: adminPassword });
   });
+  const rolesVisibleToggle = panel.querySelector("#roles-visible-toggle");
+  if (rolesVisibleToggle) {
+    rolesVisibleToggle.addEventListener("change", (e) => {
+      socket.send({ type: "admin:setRoleConfig", enabled: true, roleIds: selectedRoles, visible: e.target.checked, password: adminPassword });
+    });
+  }
   panel.querySelectorAll(".role-select-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       const roleId = chip.dataset.roleId;
       const next = selectedRoles.includes(roleId) ? selectedRoles.filter((id) => id !== roleId) : [...selectedRoles, roleId];
-      socket.send({ type: "admin:setRoleConfig", enabled: true, roleIds: next, password: adminPassword });
+      socket.send({ type: "admin:setRoleConfig", enabled: true, roleIds: next, visible: state.rolesVisibleToPlayers, password: adminPassword });
     });
   });
 
@@ -249,7 +259,6 @@ function renderDashboard(state) {
           <div class="tab ${adminTab === "players" ? "active" : ""}" id="admin-tab-players">玩家属性</div>
           <div class="tab ${adminTab === "map" ? "active" : ""}" id="admin-tab-map">地图</div>
           <div class="tab ${adminTab === "poison" ? "active" : ""}" id="admin-tab-poison">毒气伤害</div>
-          ${state.rolesEnabled ? `<div class="tab ${adminTab === "roles" ? "active" : ""}" id="admin-tab-roles">职业分配</div>` : ""}
           <div class="tab ${adminTab === "ranking" ? "active" : ""}" id="admin-tab-ranking">排行榜</div>
           <div class="tab ${adminTab === "rules" ? "active" : ""}" id="admin-tab-rules">游戏规则</div>
         </div>
@@ -273,8 +282,6 @@ function renderDashboard(state) {
   panel.querySelector("#admin-tab-players").addEventListener("click", () => { adminTab = "players"; render(); });
   panel.querySelector("#admin-tab-map").addEventListener("click", () => { adminTab = "map"; render(); });
   panel.querySelector("#admin-tab-poison").addEventListener("click", () => { adminTab = "poison"; render(); });
-  const rolesTabBtn = panel.querySelector("#admin-tab-roles");
-  if (rolesTabBtn) rolesTabBtn.addEventListener("click", () => { adminTab = "roles"; render(); });
   panel.querySelector("#admin-tab-ranking").addEventListener("click", () => { adminTab = "ranking"; render(); });
   panel.querySelector("#admin-tab-rules").addEventListener("click", () => { adminTab = "rules"; render(); });
 
@@ -300,7 +307,7 @@ function renderDashboard(state) {
         <div style="font-weight:700;font-size:16px;margin-bottom:12px;">玩家属性${isEditing ? "（编辑中，点击上方“确认”生效）" : "（实时）"}</div>
         <div style="overflow-x:auto;">
           <table class="stats-table">
-            <thead><tr><th>玩家</th><th>生命</th><th>状态</th><th>属性状态</th><th>位置</th><th>武力</th><th>速度</th><th>负重</th></tr></thead>
+            <thead><tr><th>玩家</th><th>生命</th><th>状态</th><th>属性状态</th><th>位置</th><th>武力</th><th>速度</th><th>负重</th>${state.rolesEnabled ? "<th>职业</th>" : ""}</tr></thead>
             <tbody id="players-tbody"></tbody>
           </table>
         </div>
@@ -353,44 +360,6 @@ function renderDashboard(state) {
           <tbody>${poisonDamageRows(table, state.round)}</tbody>
         </table>
       </div>`;
-  } else if (adminTab === "roles" && state.rolesEnabled) {
-    tabBody.innerHTML = `
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px;">
-          <div style="font-weight:700;font-size:16px;">职业分配</div>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#c9ccd1;cursor:pointer;">
-            <input type="checkbox" id="roles-visible-toggle" ${state.rolesVisibleToPlayers ? "checked" : ""}>
-            向玩家展示职业信息（关闭则仅公共视图和管理员可见）
-          </label>
-        </div>
-        <table class="stats-table">
-          <thead><tr><th>玩家</th><th>职业</th></tr></thead>
-          <tbody>
-            ${state.players.map((p) => `
-              <tr>
-                <td>玩家 ${p.id}</td>
-                <td>
-                  <select class="role-assign-select" data-pid="${p.id}">
-                    <option value="">（未分配）</option>
-                    ${state.selectedRoles.map((rid) => {
-                      const role = getRole(rid);
-                      const takenBy = state.players.find((pp) => pp.roleId === rid && pp.id !== p.id);
-                      return `<option value="${rid}" ${p.roleId === rid ? "selected" : ""} ${takenBy ? "disabled" : ""}>${role ? role.name : rid}${takenBy ? `（已分配给玩家${takenBy.id}）` : ""}</option>`;
-                    }).join("")}
-                  </select>
-                </td>
-              </tr>`).join("")}
-          </tbody>
-        </table>
-      </div>`;
-    tabBody.querySelectorAll(".role-assign-select").forEach((sel) => {
-      sel.addEventListener("change", () => {
-        socket.send({ type: "admin:assignPlayerRole", playerId: Number(sel.dataset.pid), roleId: sel.value || null, password: adminPassword });
-      });
-    });
-    tabBody.querySelector("#roles-visible-toggle").addEventListener("change", (e) => {
-      socket.send({ type: "admin:setRolesVisibleToPlayers", visible: e.target.checked, password: adminPassword });
-    });
   } else if (adminTab === "ranking") {
     tabBody.innerHTML = `
       <div class="card">
@@ -527,6 +496,18 @@ function healthCellHtml(pid, health, editable) {
     </div>`;
 }
 
+// Immediate-effect dropdown (like room drag-drop, not part of the batched
+// edit/commit flow) — only the roles in this game's pool are offered, and
+// whichever one is already taken by another player is shown disabled.
+function roleAssignSelectHtml(p, state) {
+  const options = state.selectedRoles.map((rid) => {
+    const role = getRole(rid);
+    const takenBy = state.players.find((pp) => pp.roleId === rid && pp.id !== p.id);
+    return `<option value="${rid}" ${p.roleId === rid ? "selected" : ""} ${takenBy ? "disabled" : ""}>${role ? role.name : rid}${takenBy ? `（玩家${takenBy.id}）` : ""}</option>`;
+  }).join("");
+  return `<select class="role-assign-select" data-pid="${p.id}" style="font-size:12px;"><option value="">（未分配）</option>${options}</select>`;
+}
+
 function renderPlayersTable(tbody, state) {
   const roomCounts = {};
   for (const pl of state.players) {
@@ -547,6 +528,7 @@ function renderPlayersTable(tbody, state) {
         <td>${fieldStepperHtml(p.id, "power", d.stats.power)}</td>
         <td>${fieldStepperHtml(p.id, "speed", d.stats.speed)}</td>
         <td>${fieldStepperHtml(p.id, "weight", d.stats.weight)}</td>
+        ${state.rolesEnabled ? `<td>${roleAssignSelectHtml(p, state)}</td>` : ""}
       </tr>`;
     }
     const dead = p.health <= 0;
@@ -560,8 +542,17 @@ function renderPlayersTable(tbody, state) {
       <td class="${sumClass}">${p.stats.power}</td>
       <td>${p.stats.speed}</td>
       <td>${p.stats.weight}</td>
+      ${state.rolesEnabled ? `<td>${roleAssignSelectHtml(p, state)}</td>` : ""}
     </tr>`;
   }).join("");
+
+  if (state.rolesEnabled) {
+    tbody.querySelectorAll(".role-assign-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        socket.send({ type: "admin:assignPlayerRole", playerId: Number(sel.dataset.pid), roleId: sel.value || null, password: adminPassword });
+      });
+    });
+  }
 
   if (isEditing) {
     tbody.querySelectorAll(".edit-input").forEach((input) => {
