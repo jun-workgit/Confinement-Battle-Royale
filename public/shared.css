@@ -324,7 +324,13 @@ html, body {
   50% { background: rgba(214,40,57,0.5); }
 }
 .room.room-hacker-marked {
-  border: 2px solid #ff8a80; box-shadow: 0 0 0 2px rgba(214,40,57,0.35);
+  border: 2px solid #2979ff;
+  background: repeating-linear-gradient(115deg, rgba(41,121,255,0.4) 0px, rgba(41,121,255,0.4) 10px, rgba(100,181,246,0.22) 10px, rgba(100,181,246,0.22) 20px);
+  animation: hacker-marked-pulse 1.6s ease-in-out infinite;
+}
+@keyframes hacker-marked-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.4); }
 }
 
 /* Game Rules "(八) 职业介绍": one image-left/text-right card per role. */
@@ -502,9 +508,29 @@ table.stats-table td.sum-full { color: #d8b258; font-weight: 700; }
 .poison-info-box tr.current td { color: #fff; font-weight: 700; }
 .poison-info-box tr.current { background: rgba(216,178,88,0.22); }
 
+/* Public view only: this round's airdrop card (202's resupply), stacked
+   directly above .poison-info-box in the same bottom-right corner. Only
+   rendered for round 1-6 — the game never runs past round 6. */
+.airdrop-box {
+  position: fixed; bottom: 185px; right: 16px; z-index: 500; width: 200px;
+  background: rgba(18,18,20,0.92); border: 1px solid rgba(216,178,88,0.35); border-radius: 8px;
+  padding: 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+}
+.airdrop-title { font-weight: 700; color: #d8b258; font-size: 12px; letter-spacing: 1px; margin-bottom: 6px; text-align: center; }
+.airdrop-img { display: block; width: 100%; border-radius: 6px; margin-bottom: 6px; }
+.airdrop-desc { font-size: 12px; line-height: 1.5; color: #c9ccd1; text-align: center; }
+
+/* Same card, inline inside the room-info modal (room 202) instead of a
+   floating box — shown on every view, not just public. */
+.airdrop-inline { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(214,218,224,0.15); }
+.airdrop-inline-title { font-weight: 700; color: #d8b258; font-size: 13px; letter-spacing: 1px; margin-bottom: 8px; }
+.airdrop-inline-img { display: block; width: 100%; max-width: 260px; border-radius: 6px; margin: 0 auto 8px; }
+.airdrop-inline-desc { font-size: 13px; line-height: 1.6; color: #dfe1e4; }
+
 @media (max-width: 720px) {
   .poison-info-box { position: static; margin-top: 14px; align-self: center; }
   .map-zoom-controls { position: static; margin-bottom: 12px; align-self: center; }
+  .airdrop-box { position: static; margin-top: 14px; align-self: center; width: 100%; max-width: 280px; }
 }
 
 .rules-box {

@@ -256,7 +256,7 @@ function renderMapTab(container, state, player) {
       });
     } else if (!inSpawnPick && !inHackerPick) {
       el.style.cursor = "pointer";
-      el.addEventListener("click", () => showRoomInfo(roomId, lang));
+      el.addEventListener("click", () => showRoomInfo(roomId, lang, state.round));
     }
   });
 

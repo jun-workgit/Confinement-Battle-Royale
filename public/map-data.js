@@ -119,21 +119,48 @@ Starting stock: 20x Junk, 1x Rope, 1x Gas Mask, 1x Rocket Launcher, 1x Dimension
   "B701": `Draw up to 3 item cards; stock: the item cards of all players who "died" (死亡) before this round.`,
 };
 
+// Room 202's airdrop resupply, one card per round — the game never runs
+// past round 6, so that's the full set. Descriptions mirror the item-card
+// text already written for 202 and item #16-21 in the rules' items section.
+const AIRDROP_CARDS = [
+  { round: 1, title: "第一轮空投物资", titleEn: "Round 1 Airdrop Supply", description: "该道具卡视为2刀，占1负重。", descriptionEn: "Counts as 2x Knife, takes 1 Capacity.", image: "/assets/airdrop/Airdrop%201.jpg" },
+  { round: 2, title: "第二轮空投物资", titleEn: "Round 2 Airdrop Supply", description: "该道具卡视为2酒，占1负重。", descriptionEn: "Counts as 2x Wine, takes 1 Capacity.", image: "/assets/airdrop/Airdrop%202.jpg" },
+  { round: 3, title: "第三轮空投物资", titleEn: "Round 3 Airdrop Supply", description: "该道具卡视为1水1粮，占1负重。", descriptionEn: "Counts as 1x Water + 1x Food, takes 1 Capacity.", image: "/assets/airdrop/Airdrop%203.jpg" },
+  { round: 4, title: "第四轮空投物资", titleEn: "Round 4 Airdrop Supply", description: "该道具卡视为1手枪。", descriptionEn: "Counts as 1x Pistol.", image: "/assets/airdrop/Airdrop%204.jpg" },
+  { round: 5, title: "第五轮空投物资", titleEn: "Round 5 Airdrop Supply", description: "该道具卡视为1肾上腺素。", descriptionEn: "Counts as 1x Adrenaline (肾上腺素).", image: "/assets/airdrop/Airdrop%205.jpg" },
+  { round: 6, title: "第六轮空投物资", titleEn: "Round 6 Airdrop Supply", description: "该道具卡视为1药片。", descriptionEn: "Counts as 1x Pill.", image: "/assets/airdrop/Airdrop%206.jpg" },
+];
+function getAirdropCard(round) {
+  return AIRDROP_CARDS.find((c) => c.round === round) || null;
+}
+
 // Shows a room's rules text in a modal. Shared by the player and public maps
 // (not the admin map, where a room click is a drag-drop target instead).
-// `lang` defaults to Chinese so public/admin callers are unaffected.
-function showRoomInfo(roomId, lang) {
+// `lang` defaults to Chinese so public/admin callers are unaffected. `round`
+// additionally appends this round's airdrop card when the room is 202.
+function showRoomInfo(roomId, lang, round) {
+  const en = lang === "en";
   const title = getRoomLabel(roomId, lang);
-  const infoMap = lang === "en" ? ROOM_INFO_EN : ROOM_INFO;
-  const body = infoMap[roomId] || (lang === "en" ? "No room description available yet." : "暂无房间说明。");
+  const infoMap = en ? ROOM_INFO_EN : ROOM_INFO;
+  const body = infoMap[roomId] || (en ? "No room description available yet." : "暂无房间说明。");
+
+  const card = roomId === "202" ? getAirdropCard(round) : null;
+  const airdropHtml = card ? `
+    <div class="airdrop-inline">
+      <div class="airdrop-inline-title">${en ? card.titleEn : card.title}</div>
+      <img class="airdrop-inline-img" src="${card.image}" alt="${en ? card.titleEn : card.title}">
+      <div class="airdrop-inline-desc">${en ? card.descriptionEn : card.description}</div>
+    </div>` : "";
+
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
     <div class="modal-card room-info">
       <div class="modal-title">${title}</div>
       <div class="modal-body-text">${body}</div>
+      ${airdropHtml}
       <div class="modal-actions">
-        <button class="btn room-info-close">${lang === "en" ? "Close" : "关闭"}</button>
+        <button class="btn room-info-close">${en ? "Close" : "关闭"}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);

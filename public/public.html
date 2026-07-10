@@ -158,9 +158,10 @@ function render() {
     mapWrap.querySelector(".map-img").style.width = Math.round(MAP_BASE_WIDTH * mapZoom) + "px";
     mapWrap.querySelectorAll(".room").forEach((el) => {
       el.style.cursor = "pointer";
-      el.addEventListener("click", () => showRoomInfo(el.dataset.roomId));
+      el.addEventListener("click", () => showRoomInfo(el.dataset.roomId, undefined, state.round));
     });
     renderPoisonInfoBox(body, state);
+    renderAirdropBox(body, state);
     body.querySelector("#zoom-out").addEventListener("click", () => { setMapZoom(mapZoom - MAP_ZOOM_STEP); render(); });
     body.querySelector("#zoom-in").addEventListener("click", () => { setMapZoom(mapZoom + MAP_ZOOM_STEP); render(); });
   }
@@ -173,6 +174,21 @@ function renderPoisonInfoBox(container, state) {
   box.innerHTML = `
     <div class="poison-info-title">毒气伤害</div>
     <table>${poisonDamageRows(table, state.round)}</table>
+  `;
+  container.appendChild(box);
+}
+
+// The game never runs past round 6, so there's no card outside 1-6 (covers
+// phase "prep", where round is still 0).
+function renderAirdropBox(container, state) {
+  const card = getAirdropCard(state.round);
+  if (!card) return;
+  const box = document.createElement("div");
+  box.className = "airdrop-box";
+  box.innerHTML = `
+    <div class="airdrop-title">${card.title}</div>
+    <img class="airdrop-img" src="${card.image}" alt="${card.title}">
+    <div class="airdrop-desc">${card.description}</div>
   `;
   container.appendChild(box);
 }
