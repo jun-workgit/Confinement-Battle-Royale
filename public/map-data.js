@@ -402,14 +402,13 @@ If any player's Health drops to 0 during any settlement step, they are publicly 
 21. Round 6 Airdrop Supply: counts as 1x Pill`,
   },
   {
+    // No text/textEn here — renderGameRules special-cases this id and calls
+    // rolesReferenceListHtml() instead, which builds image+text cards at
+    // render time from ROLES (roles-data.js), so this can't drift out of
+    // sync with the actual role definitions.
     id: "roles",
     title: "(八) 职业介绍",
     titleEn: "(8) Roles (职业)",
-    // Built at render time from ROLES (roles-data.js, loaded before this
-    // script) instead of duplicated here, so this reference can't drift out
-    // of sync with the actual role definitions.
-    text: "{{ROLES_LIST}}",
-    textEn: "{{ROLES_LIST}}",
   },
 ];
 
@@ -460,20 +459,46 @@ function formatPoisonScheduleTextEn(table) {
   return text ? text + "." : "";
 }
 
+// A role description may have several blank-line-separated clauses in the
+// source data; rendering that raw (white-space:pre-line) stacks up visible
+// gaps. Splitting on any run of newlines and re-joining as individually
+// tight lines gives consistent, compact spacing regardless of how many
+// blank lines happen to be in the source string.
+function roleDescLinesHtml(desc, lineClass) {
+  return desc
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `<div class="${lineClass}">${line}</div>`)
+    .join("");
+}
+
 // Renders the "(八) 职业介绍" reference list from the global ROLES (defined in
-// roles-data.js). Only ever called in-browser (never from server.js), so the
-// global being provided by script load order rather than a require is safe.
-function buildRolesRulesText(lang) {
+// roles-data.js) as image-left/text-right cards, one per role. Only ever
+// called in-browser (never from server.js), so the global being provided by
+// script load order rather than a require is safe.
+function rolesReferenceListHtml(lang) {
   if (typeof ROLES === "undefined" || !ROLES.length) {
-    return lang === "en" ? "No roles are defined." : "暂无职业数据。";
+    return `<div class="rules-box">${lang === "en" ? "No roles are defined." : "暂无职业数据。"}</div>`;
   }
   const en = lang === "en";
-  return ROLES.map((r) => {
-    const name = en ? r.nameEn : r.name;
-    const skill = en ? r.skillEn : r.skill;
-    const desc = en ? r.descriptionEn : r.description;
-    return `${name} - ${skill}\n${desc}`;
-  }).join("\n\n");
+  return `
+    <div class="rules-box role-rules-list">
+      ${ROLES.map((r) => {
+        const name = en ? r.nameEn : r.name;
+        const skill = en ? r.skillEn : r.skill;
+        const desc = en ? r.descriptionEn : r.description;
+        return `
+          <div class="role-rules-card">
+            <img class="role-rules-img" src="${r.image}" alt="${name}">
+            <div class="role-rules-body">
+              <div class="role-rules-name">${name}</div>
+              <div class="role-rules-skill">${skill}</div>
+              ${roleDescLinesHtml(desc, "role-rules-desc-line")}
+            </div>
+          </div>`;
+      }).join("")}
+    </div>`;
 }
 
 // `state` is optional so the rules can still render before a game exists;
@@ -491,17 +516,19 @@ function renderGameRules(container, state, lang, opts) {
 
   const sections = opts.hideRolesSection ? GAME_RULES_SECTIONS.filter((s) => s.id !== "roles") : GAME_RULES_SECTIONS;
   const current = sections.find((s) => s.id === activeRulesSection) || sections[0];
-  const text = (en ? current.textEn : current.text)
-    .split("{{TOTAL_ROUNDS}}").join(String(totalRounds))
-    .split("{{POISON_SCHEDULE}}").join(poisonSchedule)
-    .split("{{ROLES_LIST}}").join(buildRolesRulesText(en ? "en" : "zh"));
+
+  const bodyHtml = current.id === "roles"
+    ? rolesReferenceListHtml(en ? "en" : "zh")
+    : `<div class="rules-box">${(en ? current.textEn : current.text)
+        .split("{{TOTAL_ROUNDS}}").join(String(totalRounds))
+        .split("{{POISON_SCHEDULE}}").join(poisonSchedule)}</div>`;
 
   container.innerHTML = `
     <div class="card rules-card">
       <div class="rules-tabs">
         ${sections.map((s) => `<div class="rules-tab ${s.id === current.id ? "active" : ""}" data-rules-section="${s.id}">${en ? s.titleEn : s.title}</div>`).join("")}
       </div>
-      <div class="rules-box">${text}</div>
+      ${bodyHtml}
     </div>
   `;
   container.querySelectorAll("[data-rules-section]").forEach((el) => {
@@ -531,15 +558,24 @@ function rankPlayers(players) {
 // Shared ranking table — used for both the live "排行榜" tab and the
 // end-of-game result screen, so they always look and sort identically.
 // `opts.lang` defaults to Chinese so public/admin callers are unaffected.
+// `opts.showRoles` (pass `state.rolesEnabled`) adds a role column with each
+// player's assigned role thumbnail + name.
 function rankingTableHtml(players, opts) {
   opts = opts || {};
   const en = opts.lang === "en";
+  const showRoles = !!opts.showRoles;
   const ranked = rankPlayers(players);
   const rows = ranked.map((p, i) => {
     const dead = p.health <= 0;
     const img = dead ? "/assets/player-dead.png" : "/assets/player-alive.png";
     const healthText = dead ? `${en ? "Needs" : "需吸取"} ${Math.max(0, -p.health)}` : p.health;
     const isMe = opts.meId === p.id;
+    const role = showRoles ? getRole(p.roleId) : null;
+    const roleCell = showRoles
+      ? `<td>${role
+          ? `<span class="ranking-role"><img src="${role.image}" alt="${en ? role.nameEn : role.name}">${en ? role.nameEn : role.name}</span>`
+          : `<span class="ranking-role-none">${en ? "Unassigned" : "未分配"}</span>`}</td>`
+      : "";
     return `
       <tr class="${isMe ? "me-row" : ""}">
         <td class="leader-rank ${i === 0 && !dead ? "gold" : ""}">${i + 1}</td>
@@ -549,11 +585,13 @@ function rankingTableHtml(players, opts) {
         <td>${p.stats.power}</td>
         <td>${p.stats.speed}</td>
         <td>${p.stats.weight}</td>
+        ${roleCell}
       </tr>`;
   }).join("");
   const headers = en
     ? ["Rank", "", "Player", "Health", "Power", "Speed", "Capacity"]
     : ["排名", "", "玩家", "生命", "武力", "速度", "负重"];
+  if (showRoles) headers.push(en ? "Role" : "职业");
   return `
     <table class="stats-table ranking-table">
       <thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>

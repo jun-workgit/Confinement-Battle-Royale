@@ -364,7 +364,7 @@ function renderDashboard(state) {
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">排行榜（存活优先，其次比生命值）</div>
-        <div style="overflow-x:auto;">${rankingTableHtml(state.players)}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { showRoles: state.rolesEnabled })}</div>
       </div>`;
   } else if (adminTab === "rules") {
     renderGameRules(tabBody, state);
@@ -496,16 +496,54 @@ function healthCellHtml(pid, health, editable) {
     </div>`;
 }
 
-// Immediate-effect dropdown (like room drag-drop, not part of the batched
+// Pill button (thumbnail + name) that opens the role-assign modal below —
+// nicer than a plain <select>, and lets the picker show each role's image.
+function roleAssignButtonHtml(p) {
+  const role = getRole(p.roleId);
+  return `
+    <button class="role-assign-btn" data-pid="${p.id}">
+      ${role ? `<img src="${role.image}" alt="${role.name}"><span>${role.name}</span>` : `<span class="role-assign-placeholder">未分配</span>`}
+    </button>`;
+}
+
+// Immediate-effect assignment (like room drag-drop, not part of the batched
 // edit/commit flow) — only the roles in this game's pool are offered, and
 // whichever one is already taken by another player is shown disabled.
-function roleAssignSelectHtml(p, state) {
-  const options = state.selectedRoles.map((rid) => {
-    const role = getRole(rid);
-    const takenBy = state.players.find((pp) => pp.roleId === rid && pp.id !== p.id);
-    return `<option value="${rid}" ${p.roleId === rid ? "selected" : ""} ${takenBy ? "disabled" : ""}>${role ? role.name : rid}${takenBy ? `（玩家${takenBy.id}）` : ""}</option>`;
-  }).join("");
-  return `<select class="role-assign-select" data-pid="${p.id}" style="font-size:12px;"><option value="">（未分配）</option>${options}</select>`;
+function openRoleAssignModal(p, state) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card role-assign-modal">
+      <div class="modal-title">为玩家 ${p.id} 选择职业</div>
+      <div class="role-select-grid">
+        <div class="role-select-chip ${!p.roleId ? "selected" : ""}" data-role-id="">
+          <div class="role-select-chip-empty">✕</div>
+          <span>未分配</span>
+        </div>
+        ${state.selectedRoles.map((rid) => {
+          const role = getRole(rid);
+          const takenBy = state.players.find((pp) => pp.roleId === rid && pp.id !== p.id);
+          return `
+            <div class="role-select-chip ${p.roleId === rid ? "selected" : ""} ${takenBy ? "disabled" : ""}" data-role-id="${rid}">
+              <img src="${role.image}" alt="${role.name}">
+              <span>${role.name}${takenBy ? `（玩家${takenBy.id}）` : ""}</span>
+            </div>`;
+        }).join("")}
+      </div>
+      <div class="modal-actions">
+        <button class="btn secondary role-assign-close">关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".role-assign-close").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelectorAll(".role-select-chip:not(.disabled)").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      socket.send({ type: "admin:assignPlayerRole", playerId: p.id, roleId: chip.dataset.roleId || null, password: adminPassword });
+      close();
+    });
+  });
 }
 
 function renderPlayersTable(tbody, state) {
@@ -528,7 +566,7 @@ function renderPlayersTable(tbody, state) {
         <td>${fieldStepperHtml(p.id, "power", d.stats.power)}</td>
         <td>${fieldStepperHtml(p.id, "speed", d.stats.speed)}</td>
         <td>${fieldStepperHtml(p.id, "weight", d.stats.weight)}</td>
-        ${state.rolesEnabled ? `<td>${roleAssignSelectHtml(p, state)}</td>` : ""}
+        ${state.rolesEnabled ? `<td>${roleAssignButtonHtml(p)}</td>` : ""}
       </tr>`;
     }
     const dead = p.health <= 0;
@@ -542,14 +580,15 @@ function renderPlayersTable(tbody, state) {
       <td class="${sumClass}">${p.stats.power}</td>
       <td>${p.stats.speed}</td>
       <td>${p.stats.weight}</td>
-      ${state.rolesEnabled ? `<td>${roleAssignSelectHtml(p, state)}</td>` : ""}
+      ${state.rolesEnabled ? `<td>${roleAssignButtonHtml(p)}</td>` : ""}
     </tr>`;
   }).join("");
 
   if (state.rolesEnabled) {
-    tbody.querySelectorAll(".role-assign-select").forEach((sel) => {
-      sel.addEventListener("change", () => {
-        socket.send({ type: "admin:assignPlayerRole", playerId: Number(sel.dataset.pid), roleId: sel.value || null, password: adminPassword });
+    tbody.querySelectorAll(".role-assign-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const player = state.players.find((pp) => pp.id === Number(btn.dataset.pid));
+        if (player) openRoleAssignModal(player, state);
       });
     });
   }
@@ -599,7 +638,7 @@ function renderEndedAdmin(state) {
     <div class="panel-body" style="display:flex;flex-direction:column;gap:24px;">
       <div class="card">
         <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">游戏结束 · 排行榜</div>
-        <div style="overflow-x:auto;">${rankingTableHtml(state.players)}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { showRoles: state.rolesEnabled })}</div>
       </div>
       <div style="display:flex;justify-content:flex-end;">
         <button class="btn" id="restart-btn">重新开始游戏</button>

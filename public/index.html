@@ -168,7 +168,7 @@ function render() {
     body.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">${t("rankingTitle")}</div>
-        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player.id, lang })}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player.id, lang, showRoles: state.rolesEnabled })}</div>
       </div>`;
   } else if (activeTab === "rules") {
     renderGameRules(body, state, lang, { hideRolesSection: !(state.rolesEnabled && state.rolesVisibleToPlayers) });
@@ -285,7 +285,7 @@ function roleCardHtml(player) {
         <div class="role-card-title">${t("roleSectionTitle")}</div>
         <div class="role-card-name">${name}</div>
         <div class="role-card-skill">${skill}</div>
-        <div class="role-card-desc">${desc}</div>
+        <div class="role-card-desc">${roleDescLinesHtml(desc, "role-card-desc-line")}</div>
       </div>
     </div>`;
 }
@@ -387,7 +387,7 @@ function renderEnded(state, player) {
     <div class="panel-body">
       <div class="card">
         <div style="font-weight:700;font-size:18px;margin-bottom:14px;text-align:center;">${t("gameOverRanking")}</div>
-        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player && player.id, lang })}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { meId: player && player.id, lang, showRoles: state.rolesEnabled })}</div>
       </div>
     </div>
   `;
