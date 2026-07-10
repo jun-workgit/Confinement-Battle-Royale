@@ -560,20 +560,29 @@ function rankPlayers(players) {
 }
 
 // Shared ranking table — used for both the live "排行榜" tab and the
-// end-of-game result screen, so they always look and sort identically.
-// `opts.lang` defaults to Chinese so public/admin callers are unaffected.
-// `opts.showRoles` (pass `state.rolesEnabled`) adds a role column with each
-// player's assigned role thumbnail + name.
+// end-of-game result screen. `opts.lang` defaults to Chinese so public/admin
+// callers are unaffected. `opts.showRoles` (pass `state.rolesEnabled`) adds a
+// role column with each player's assigned role thumbnail + name.
+//
+// `opts.restricted` is the live (non-ended) player/public view: no rank
+// order (players listed 1..N as-is, not by health), and Power/Speed/Capacity
+// blanked out for every row except the viewer's own (`opts.meId`) — only
+// Health is public knowledge mid-game. Admin callers never pass this, and
+// no caller passes it for the end-of-game result screen, so both always see
+// the full ranked/all-stats table.
 function rankingTableHtml(players, opts) {
   opts = opts || {};
   const en = opts.lang === "en";
   const showRoles = !!opts.showRoles;
-  const ranked = rankPlayers(players);
-  const rows = ranked.map((p, i) => {
+  const restricted = !!opts.restricted;
+  const list = restricted ? players : rankPlayers(players);
+  const rows = list.map((p, i) => {
     const dead = p.health <= 0;
     const img = dead ? "/assets/player-dead.png" : "/assets/player-alive.png";
     const healthText = dead ? `${en ? "Needs" : "需吸取"} ${Math.max(0, -p.health)}` : p.health;
     const isMe = opts.meId === p.id;
+    const canSeeStats = !restricted || isMe;
+    const statText = (v) => canSeeStats ? v : `<span class="stat-hidden">-</span>`;
     const role = showRoles ? getRole(p.roleId) : null;
     const roleCell = showRoles
       ? `<td>${role
@@ -582,23 +591,29 @@ function rankingTableHtml(players, opts) {
       : "";
     return `
       <tr class="${isMe ? "me-row" : ""}">
-        <td class="leader-rank ${i === 0 && !dead ? "gold" : ""}">${i + 1}</td>
+        ${restricted ? "" : `<td class="leader-rank ${i === 0 && !dead ? "gold" : ""}">${i + 1}</td>`}
         <td><img class="ranking-avatar" src="${img}" alt="${dead ? (en ? "Shadow (暗影)" : "暗影") : (en ? "Alive" : "存活")}"></td>
-        <td>${en ? "Player" : "玩家"} ${p.id}${isMe ? (en ? " (You)" : "（你）") : ""}</td>
+        <td class="ranking-player-cell">${en ? "Player" : "玩家"} ${p.id}${isMe ? (en ? " (You)" : "（你）") : ""}</td>
         <td>${healthText}</td>
-        <td>${p.stats.power}</td>
-        <td>${p.stats.speed}</td>
-        <td>${p.stats.weight}</td>
+        <td>${statText(p.stats.power)}</td>
+        <td>${statText(p.stats.speed)}</td>
+        <td>${statText(p.stats.weight)}</td>
         ${roleCell}
       </tr>`;
   }).join("");
-  const headers = en
-    ? ["Rank", "", "Player", "Health", "Power", "Speed", "Capacity"]
-    : ["排名", "", "玩家", "生命", "武力", "速度", "负重"];
-  if (showRoles) headers.push(en ? "Role" : "职业");
+  const headers = [
+    ...(restricted ? [] : [{ text: en ? "Rank" : "排名" }]),
+    { text: "" }, // avatar column, header-less
+    { text: en ? "Player" : "玩家", cellClass: "ranking-player-cell" },
+    { text: en ? "Health" : "生命" },
+    { text: en ? "Power" : "武力" },
+    { text: en ? "Speed" : "速度" },
+    { text: en ? "Capacity" : "负重" },
+  ];
+  if (showRoles) headers.push({ text: en ? "Role" : "职业" });
   return `
     <table class="stats-table ranking-table">
-      <thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+      <thead><tr>${headers.map((h) => `<th class="${h.cellClass || ""}">${h.text}</th>`).join("")}</tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }

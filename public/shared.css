@@ -368,10 +368,11 @@ html, body {
 .ranking-avatar { width: 40px; height: 40px; object-fit: contain; border-radius: 6px; background: rgba(0,0,0,0.3); display: block; margin: 0 auto; }
 .ranking-table { max-width: 860px; margin: 0 auto; }
 .ranking-table td, .ranking-table th { padding: 12px 16px; text-align: center; }
-.ranking-table td:nth-child(3), .ranking-table th:nth-child(3) { text-align: left; padding-left: 20px; }
+.ranking-table .ranking-player-cell { text-align: left; padding-left: 20px; }
 .ranking-role { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #d8b258; font-weight: 700; }
 .ranking-role img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
 .ranking-role-none { font-size: 12px; color: #8b9482; }
+.stat-hidden { color: #8b9482; }
 
 .room-conflict-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 

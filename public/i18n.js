@@ -35,7 +35,7 @@ const UI_TEXT = {
   needed: ["需：", "Needed: "],
   needStats: ["分配基因点数", "Allocate Gene Points (基因点数)"],
   needSpawn: ["选择出生点", "Choose Spawn (出生点)"],
-  rankingTitle: ["排行榜（存活优先，其次比生命值）", "Ranking (Alive first, then by Health)"],
+  rankingTitle: ["玩家状态（仅生命值公开）", "Player Status (Health only is public)"],
   poisonTableTitle: ["毒气伤害对照表", "Poison Damage (毒气) Table"],
   colRound: ["回合", "Round"],
   colHealthLoss: ["生命消耗", "Health Loss"],
