@@ -257,7 +257,10 @@ function renderMapTab(container, state, player) {
         selectingSpawn = false;
         render();
       });
-    } else if (inHackerPick && roomId === hackerRestrictedRoom) {
+    } else if (inHackerPick && (roomId === hackerRestrictedRoom || TRANSIT_ROOM_IDS.includes(roomId))) {
+      // Transit rooms (Bridge/Tunnel) have no room function to disable and
+      // the server rejects them — show them as blocked, same as the
+      // previous-round room.
       el.classList.add("room-hacker-restricted");
     } else if (inHackerPick) {
       el.classList.add("room-hacker-selectable");
