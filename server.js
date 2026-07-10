@@ -14,6 +14,9 @@ const SPAWN_ROOM_ID_SET = new Set(SPAWN_ROOM_IDS);
 const STAT_IDS = STAT_DEFS.map((s) => s.id);
 const PORT = process.env.PORT || 8000;
 const ADMIN_PASSWORD = "0000";
+// Google Apps Script web app (bound to the stats-tracking spreadsheet's
+// "API" sheet tab) that the admin import button pulls player data from.
+const SHEET_API_URL = "https://script.google.com/macros/s/AKfycbwLvdoyuvtGCudYriJxVVqOzkeVgYvwjfvS57_Q53OLGeRT_C_R-6vxi4JNkTnpFftv/exec";
 
 // phase: "setup" -> "prep" -> "in_progress" -> "ended" -> ("setup" via restart)
 function defaultState() {
@@ -150,6 +153,28 @@ app.post("/api/admin-login", (req, res) => {
     res.json({ ok: true });
   } else {
     res.status(401).json({ ok: false });
+  }
+});
+
+// Server-side proxy to the stats spreadsheet's Apps Script web app — avoids
+// a cross-origin fetch from the browser and keeps the sheet URL out of
+// client-side code. Password-gated like every other admin action, even
+// though it's read-only, since it triggers an outbound call on request.
+app.get("/api/import-players", async (req, res) => {
+  if (req.query.password !== ADMIN_PASSWORD) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const sheetRes = await fetch(SHEET_API_URL, { redirect: "follow" });
+    if (!sheetRes.ok) {
+      res.status(502).json({ ok: false, error: "sheet_fetch_failed" });
+      return;
+    }
+    const data = await sheetRes.json();
+    res.json({ ok: true, players: Array.isArray(data.players) ? data.players : [] });
+  } catch {
+    res.status(502).json({ ok: false, error: "sheet_fetch_error" });
   }
 });
 

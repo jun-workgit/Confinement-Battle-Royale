@@ -63,6 +63,43 @@ function commitEdit(state) {
   draft = null;
 }
 
+// Pulls Strength/Speed/Capacity/End Room from the stats spreadsheet and
+// applies them. Stats land in `draft` only (admin still has to click
+// "确认" to commit — this button is only visible while isEditing), but
+// room isn't part of the draft/commit flow in this app (it's always an
+// immediate action, like the map drag-drop), so it's sent right away.
+async function importPlayersFromSheet(state) {
+  const btn = panel.querySelector("#import-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "导入中..."; }
+  try {
+    const res = await fetch(`/api/import-players?password=${encodeURIComponent(adminPassword)}`);
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      alert("导入失败：" + (data.error || "未知错误"));
+      return;
+    }
+    let statsCount = 0, roomCount = 0;
+    data.players.forEach((p) => {
+      const d = draft.players[p.id];
+      if (!d) return; // not a player in the current game
+      if (p.strength != null) d.stats.power = Math.max(0, Math.round(p.strength));
+      if (p.speed != null) d.stats.speed = Math.max(0, Math.round(p.speed));
+      if (p.capacity != null) d.stats.weight = Math.max(0, Math.round(p.capacity));
+      if (p.strength != null || p.speed != null || p.capacity != null) statsCount++;
+      if (p.endRoom && STOPPABLE_ROOM_IDS.includes(p.endRoom)) {
+        socket.send({ type: "admin:setPlayerRoom", playerId: p.id, room: p.endRoom, password: adminPassword });
+        roomCount++;
+      }
+    });
+    render();
+    alert(`已导入 ${statsCount} 名玩家的属性、${roomCount} 个位置。属性仍需点击"确认"才会生效。`);
+  } catch {
+    alert("导入失败，请检查网络连接后重试。");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "导入体测数据"; }
+  }
+}
+
 async function boot() {
   if (adminPassword) {
     const ok = await verifyAdminPassword(adminPassword);
@@ -263,7 +300,8 @@ function renderDashboard(state) {
           <div class="tab ${adminTab === "rules" ? "active" : ""}" id="admin-tab-rules">游戏规则</div>
         </div>
         ${isEditing
-          ? `<button class="btn" id="commit-btn" style="padding:6px 14px;font-size:12px;">确认</button>
+          ? `<button class="btn secondary" id="import-btn" style="padding:6px 14px;font-size:12px;">导入体测数据</button>
+             <button class="btn" id="commit-btn" style="padding:6px 14px;font-size:12px;">确认</button>
              <button class="btn secondary" id="cancel-btn" style="padding:6px 14px;font-size:12px;">取消</button>`
           : `<button class="btn secondary" id="edit-btn" style="padding:6px 14px;font-size:12px;">编辑</button>`
         }
@@ -371,6 +409,7 @@ function renderDashboard(state) {
   }
 
   if (isEditing) {
+    panel.querySelector("#import-btn").addEventListener("click", () => importPlayersFromSheet(state));
     panel.querySelector("#commit-btn").addEventListener("click", () => commitEdit(state));
     panel.querySelector("#cancel-btn").addEventListener("click", () => cancelEdit());
   } else {
