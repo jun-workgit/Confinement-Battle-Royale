@@ -473,18 +473,20 @@ function roleDescLinesHtml(desc, lineClass) {
     .join("");
 }
 
-// Renders the "(八) 职业介绍" reference list from the global ROLES (defined in
-// roles-data.js) as image-left/text-right cards, one per role. Only ever
-// called in-browser (never from server.js), so the global being provided by
-// script load order rather than a require is safe.
-function rolesReferenceListHtml(lang) {
-  if (typeof ROLES === "undefined" || !ROLES.length) {
-    return `<div class="rules-box">${lang === "en" ? "No roles are defined." : "暂无职业数据。"}</div>`;
-  }
+// Renders the "(八) 职业介绍" reference list as image-left/text-right cards,
+// one per role actually in play this game (`roleIds` = state.selectedRoles)
+// rather than the full roster — a 6-player game with 6 chosen roles only
+// references those 6. Reads the global ROLES (roles-data.js); only ever
+// called in-browser (never from server.js), so that's safe.
+function rolesReferenceListHtml(lang, roleIds) {
   const en = lang === "en";
+  const roles = (Array.isArray(roleIds) ? roleIds : []).map((id) => getRole(id)).filter(Boolean);
+  if (!roles.length) {
+    return `<div class="rules-box">${en ? "No roles are in play this game." : "本局未启用任何职业。"}</div>`;
+  }
   return `
     <div class="rules-box role-rules-list">
-      ${ROLES.map((r) => {
+      ${roles.map((r) => {
         const name = en ? r.nameEn : r.name;
         const skill = en ? r.skillEn : r.skill;
         const desc = en ? r.descriptionEn : r.description;
@@ -503,10 +505,11 @@ function rolesReferenceListHtml(lang) {
 
 // `state` is optional so the rules can still render before a game exists;
 // falls back to the default table/round count in that case. `lang` defaults
-// to Chinese so public/admin callers are unaffected. `opts.hideRolesSection`
-// drops the "(八) 职业介绍" tab entirely — used by the player view when the
-// admin has turned off role visibility for players; public/admin views never
-// pass this, so they always see it regardless of that toggle.
+// to Chinese so public/admin callers are unaffected. The "(八) 职业介绍" tab
+// only appears at all when this game has roles enabled (same rule for every
+// view — nothing to reference otherwise); `opts.hideRolesSection` drops it
+// further, used only by the player view when the admin has turned off role
+// visibility for players specifically.
 function renderGameRules(container, state, lang, opts) {
   opts = opts || {};
   const en = lang === "en";
@@ -514,11 +517,12 @@ function renderGameRules(container, state, lang, opts) {
   const totalRounds = table.length ? Math.max(...table.map((r) => r.round)) : 6;
   const poisonSchedule = en ? formatPoisonScheduleTextEn(table) : formatPoisonScheduleText(table);
 
-  const sections = opts.hideRolesSection ? GAME_RULES_SECTIONS.filter((s) => s.id !== "roles") : GAME_RULES_SECTIONS;
+  const rolesActive = !!(state && state.rolesEnabled) && !opts.hideRolesSection;
+  const sections = rolesActive ? GAME_RULES_SECTIONS : GAME_RULES_SECTIONS.filter((s) => s.id !== "roles");
   const current = sections.find((s) => s.id === activeRulesSection) || sections[0];
 
   const bodyHtml = current.id === "roles"
-    ? rolesReferenceListHtml(en ? "en" : "zh")
+    ? rolesReferenceListHtml(en ? "en" : "zh", state.selectedRoles)
     : `<div class="rules-box">${(en ? current.textEn : current.text)
         .split("{{TOTAL_ROUNDS}}").join(String(totalRounds))
         .split("{{POISON_SCHEDULE}}").join(poisonSchedule)}</div>`;

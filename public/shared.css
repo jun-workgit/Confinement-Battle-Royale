@@ -294,14 +294,21 @@ html, body {
 .role-card-desc-line:last-child { margin-bottom: 0; }
 
 /* Game Rules "(八) 职业介绍": one image-left/text-right card per role. */
-.role-rules-list { display: flex; flex-direction: column; gap: 16px; }
-.role-rules-card { display: flex; gap: 16px; align-items: flex-start; padding-bottom: 16px; border-bottom: 1px solid rgba(214,218,224,0.15); }
+/* .rules-box (shared with the plain-text sections) sets white-space:pre-line
+   and line-height:1.9 for prose content; both inherit into these cards and
+   turn the template literal's own indentation whitespace into visible
+   forced line breaks, and inflate line spacing, unless reset here. */
+/* Combined selector (not just .role-rules-list) so this beats .rules-box's
+   white-space:pre-line/line-height:1.9 on specificity, not source order —
+   .rules-box is declared later in this file and would otherwise win the tie. */
+.rules-box.role-rules-list { display: flex; flex-direction: column; gap: 14px; white-space: normal; line-height: normal; font-size: inherit; }
+.role-rules-card { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid rgba(214,218,224,0.15); }
 .role-rules-card:last-child { border-bottom: none; padding-bottom: 0; }
-.role-rules-img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(214,218,224,0.3); flex-shrink: 0; background: #1c1e20; }
-.role-rules-body { flex: 1; min-width: 0; }
-.role-rules-name { font-weight: 800; font-size: 16px; color: #d8b258; margin-bottom: 2px; }
-.role-rules-skill { font-weight: 700; font-size: 13px; color: #eef0f2; margin-bottom: 6px; }
-.role-rules-desc-line { font-size: 13px; line-height: 1.55; color: #c9ccd1; margin-bottom: 3px; }
+.role-rules-img { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(214,218,224,0.3); flex-shrink: 0; background: #1c1e20; align-self: flex-start; }
+.role-rules-body { flex: 1; min-width: 0; align-self: flex-start; }
+.role-rules-name { font-weight: 800; font-size: 15px; line-height: 1.3; color: #d8b258; margin: 0 0 2px; }
+.role-rules-skill { font-weight: 700; font-size: 13px; line-height: 1.3; color: #eef0f2; margin: 0 0 5px; }
+.role-rules-desc-line { font-size: 13px; line-height: 1.5; color: #c9ccd1; margin: 0 0 2px; }
 .role-rules-desc-line:last-child { margin-bottom: 0; }
 
 /* Selectable role chip grid — used by the admin setup screen's role pool
