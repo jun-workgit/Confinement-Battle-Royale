@@ -4,6 +4,7 @@ const http = require("http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const { FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE } = require("./public/map-data.js");
+const { ROLE_ID_SET } = require("./public/roles-data.js");
 
 const STATE_FILE = path.join(__dirname, "game-state.json");
 const FLOOR_IDS = new Set(FLOORS.map((f) => f.id));
@@ -23,7 +24,28 @@ function defaultState() {
     round: 0,
     poisonFloors: [],
     poisonDamageTable: DEFAULT_POISON_DAMAGE_TABLE.map((r) => ({ ...r })),
+    // Optional per-game role assignment — off by default. `selectedRoles` is
+    // the fixed pool (one entry per player, chosen before createGame);
+    // `rolesVisibleToPlayers` controls only whether index.html shows a
+    // player their own role — public/admin views always show assignments.
+    rolesEnabled: false,
+    selectedRoles: [],
+    rolesVisibleToPlayers: true,
   };
+}
+
+// Only known role ids survive, de-duplicated, in the given order.
+function clampSelectedRoles(roleIds) {
+  if (!Array.isArray(roleIds)) return [];
+  const clean = [];
+  const seen = new Set();
+  for (const id of roleIds) {
+    if (typeof id === "string" && ROLE_ID_SET.has(id) && !seen.has(id)) {
+      seen.add(id);
+      clean.push(id);
+    }
+  }
+  return clean;
 }
 
 function clampPoisonDamageTable(table) {
@@ -160,6 +182,9 @@ wss.on("connection", (ws) => {
         if (state.phase !== "setup") return;
         const n = Math.max(1, Math.min(200, Math.round(Number(msg.playerCount) || 0)));
         if (!n) return;
+        // Role pool (if enabled) is chosen up front and must exactly cover
+        // every player — otherwise assignment later couldn't be 1:1.
+        if (state.rolesEnabled && state.selectedRoles.length !== n) return;
         state = {
           phase: "prep",
           playerCount: n,
@@ -168,11 +193,44 @@ wss.on("connection", (ws) => {
             stats: { power: 0, speed: 0, weight: 0 },
             health: DEFAULT_HEALTH,
             room: null,
+            roleId: null,
           })),
           round: 0,
           poisonFloors: [],
           poisonDamageTable: state.poisonDamageTable,
+          rolesEnabled: state.rolesEnabled,
+          selectedRoles: state.selectedRoles,
+          rolesVisibleToPlayers: state.rolesVisibleToPlayers,
         };
+        break;
+      }
+      case "admin:setRoleConfig": {
+        if (state.phase !== "setup") return;
+        state.rolesEnabled = !!msg.enabled;
+        state.selectedRoles = clampSelectedRoles(msg.roleIds);
+        break;
+      }
+      case "admin:assignPlayerRole": {
+        if (state.phase !== "prep" && state.phase !== "in_progress") return;
+        if (!state.rolesEnabled) return;
+        const playerId = Math.round(Number(msg.playerId));
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player) return;
+        const roleId = msg.roleId === null || msg.roleId === undefined ? null : String(msg.roleId);
+        if (roleId !== null && !state.selectedRoles.includes(roleId)) return;
+        // Each role in the pool belongs to at most one player — reassigning
+        // it elsewhere vacates it from whoever held it before.
+        if (roleId !== null) {
+          for (const p of state.players) {
+            if (p.id !== player.id && p.roleId === roleId) p.roleId = null;
+          }
+        }
+        player.roleId = roleId;
+        break;
+      }
+      case "admin:setRolesVisibleToPlayers": {
+        if (state.phase !== "prep" && state.phase !== "in_progress") return;
+        state.rolesVisibleToPlayers = !!msg.visible;
         break;
       }
       case "admin:setPoisonDamageTable": {

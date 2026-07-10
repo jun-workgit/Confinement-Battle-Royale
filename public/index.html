@@ -15,6 +15,7 @@
 </div>
 
 <script src="/map-data.js"></script>
+<script src="/roles-data.js"></script>
 <script src="/i18n.js"></script>
 <script src="/ws-client.js"></script>
 <script src="/auth.js"></script>
@@ -266,6 +267,29 @@ function objectiveBoxHtml() {
     </div>`;
 }
 
+// Shown only to the player themselves, and only when the admin has both
+// enabled roles for this game and left them visible to players.
+function roleCardHtml(player) {
+  const state = latestState;
+  if (!state || !state.rolesEnabled || !state.rolesVisibleToPlayers || !player.roleId) return "";
+  const role = getRole(player.roleId);
+  if (!role) return "";
+  const lang = getLang();
+  const name = lang === "en" ? role.nameEn : role.name;
+  const skill = lang === "en" ? role.skillEn : role.skill;
+  const desc = lang === "en" ? role.descriptionEn : role.description;
+  return `
+    <div class="role-card">
+      <img class="role-card-img" src="${role.image}" alt="${name}">
+      <div class="role-card-body">
+        <div class="role-card-title">${t("roleSectionTitle")}</div>
+        <div class="role-card-name">${name}</div>
+        <div class="role-card-skill">${skill}</div>
+        <div class="role-card-desc">${desc}</div>
+      </div>
+    </div>`;
+}
+
 function renderStatsEditor(container, player) {
   const lang = getLang();
   const stats = player.stats;
@@ -301,6 +325,7 @@ function renderStatsEditor(container, player) {
       </div>
     </div>
     ${objectiveBoxHtml()}
+    ${roleCardHtml(player)}
   `;
 
   container.querySelectorAll(".stepper-btn").forEach((btn) => {
@@ -345,6 +370,7 @@ function renderStatsReadonly(container, player) {
       </div>
     </div>
     ${objectiveBoxHtml()}
+    ${roleCardHtml(player)}
   `;
 }
 

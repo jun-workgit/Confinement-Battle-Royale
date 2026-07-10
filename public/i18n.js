@@ -60,6 +60,7 @@ const UI_TEXT = {
     "Share a room with a living player to absorb their Health; revive once you've absorbed 2 points total.",
   ],
   pointsLeftPrefix: ["剩余可分配点数: ", "Points remaining: "],
+  roleSectionTitle: ["职业", "Role"],
   gameOverRanking: ["游戏结束 · 排行榜", "Game Over · Ranking"],
   close: ["关闭", "Close"],
 };

@@ -278,6 +278,40 @@ html, body {
 .objective-tag.alive { background: rgba(76,175,80,0.18); color: #4caf50; }
 .objective-tag.dead { background: rgba(180,108,240,0.18); color: #b46cf0; }
 
+/* Player's own role card (index.html), shown below the objective box. */
+.role-card {
+  margin-top: 20px; display: flex; gap: 18px; align-items: flex-start;
+  padding: 16px 18px; background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(216,178,88,0.35); border-radius: 8px;
+  max-width: 780px; margin-left: auto; margin-right: auto;
+}
+.role-card-img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(214,218,224,0.3); flex-shrink: 0; background: #1c1e20; }
+.role-card-body { flex: 1; min-width: 0; }
+.role-card-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #8b9482; text-transform: uppercase; margin-bottom: 4px; }
+.role-card-name { font-weight: 800; font-size: 17px; color: #d8b258; margin-bottom: 4px; }
+.role-card-skill { font-weight: 700; font-size: 13px; color: #eef0f2; margin-bottom: 8px; }
+.role-card-desc { font-size: 13px; line-height: 1.7; color: #c9ccd1; white-space: pre-line; }
+
+/* Admin setup screen: selectable role chip grid. */
+.role-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 10px; max-height: 360px; overflow-y: auto; padding-right: 4px; }
+.role-select-chip {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px;
+  border-radius: 6px; border: 1px solid rgba(214,218,224,0.3); cursor: pointer;
+  background: linear-gradient(180deg,#3a3d42,#222427); transition: border-color 0.12s ease;
+  user-select: none;
+}
+.role-select-chip img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; }
+.role-select-chip span { font-size: 11px; text-align: center; color: #c9ccd1; }
+.role-select-chip.selected { border-color: #d8b258; box-shadow: 0 0 0 1px #d8b258 inset; }
+.role-select-chip.selected span { color: #d8b258; font-weight: 700; }
+
+/* Public view: role reveal grid (all players + assigned role). */
+.role-reveal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+.role-reveal-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px; border-radius: 8px; background: rgba(0,0,0,0.2); border: 1px solid rgba(214,218,224,0.2); text-align: center; }
+.role-reveal-card img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
+.role-reveal-name { font-weight: 700; color: #d8b258; font-size: 13px; }
+.role-reveal-skill { font-size: 11px; color: #c9ccd1; }
+
 .readonly-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: rgba(0,0,0,0.15); border-radius: 6px; }
 .readonly-row .rlabel { display: flex; align-items: center; gap: 10px; font-weight: 700; }
 .readonly-row .rvalue { font-size: 16px; font-weight: 700; color: #d8b258; }
@@ -469,4 +503,7 @@ table.stats-table td.sum-full { color: #d8b258; font-weight: 700; }
   .panel-body.rules-tab-active { padding: 8px; }
   .panel-body.rules-tab-active .rules-card { padding: 10px; }
   .rules-box { padding: 10px 12px; font-size: 13.5px; line-height: 1.65; }
+
+  .role-card { flex-direction: column; align-items: center; text-align: center; }
+  .role-card-img { width: 120px; height: 120px; }
 }
