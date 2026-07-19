@@ -160,15 +160,17 @@ function getRole(roleId) {
 // total-use cap either, but with nothing to count against, an "unlimited"
 // badge added no value, so it's intentionally left untracked.
 //
-// hacker's 1 here is its SECOND ability (基因室/控制室/操作室 一次性三选一)
-// -- its room-disable ability is a separate, already-implemented per-round
-// mechanic (state.hackerRoomMark), not part of this counter.
+// hacker's 3 here is its SECOND ability (基因室/控制室/操作室) -- each of
+// the 3 rooms' functions can be triggered once each (not "pick one of the
+// three, ever"), so the budget is 3 total, not 1. Its room-disable ability
+// is a separate, already-implemented per-round mechanic
+// (state.hackerRoomMark), not part of this counter.
 const ROLE_SKILL_LIMITS = {
   beast_tamer: 4,   // 驯兽师 · 巡回猎犬
   hypnotist: 4,     // 催眠师 · 催眠治疗
   detective: 3,     // 私家侦探 · 秘密跟踪
   prophet: 6,       // 预言家 · 死亡预告
-  hacker: 1,        // 黑客 · 基因室/控制室/操作室功能（三选一）
+  hacker: 3,        // 黑客 · 基因室/控制室/操作室功能（各1次）
 };
 
 if (typeof module !== "undefined") {
