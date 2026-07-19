@@ -150,6 +150,26 @@ function getRole(roleId) {
   return ROLES.find((r) => r.id === roleId) || null;
 }
 
+// Total-use budgets for the subset of role skills that are a player/admin-
+// invoked action worth counting (as opposed to a passive/reactive effect
+// like 暗影使者/入殓师, or a pure item-card mechanic the app has no model
+// for at all, like 富豪/雇佣兵/饮品师). null = no total-game cap (usable
+// every round, only naturally bounded by the 6-round game length) — shown
+// as "unlimited" rather than an x/n count. Roles not listed here have
+// nothing here worth tracking as a simple counter.
+//
+// hacker's 1 here is its SECOND ability (基因室/控制室/操作室 一次性三选一)
+// -- its room-disable ability is a separate, already-implemented per-round
+// mechanic (state.hackerRoomMark), not part of this counter.
+const ROLE_SKILL_LIMITS = {
+  beast_tamer: 4,   // 驯兽师 · 巡回猎犬
+  hypnotist: 4,     // 催眠师 · 催眠治疗
+  detective: 3,     // 私家侦探 · 秘密跟踪
+  prophet: 6,       // 预言家 · 死亡预告
+  chemist: null,    // 化学家 · 毒性调和
+  hacker: 1,        // 黑客 · 基因室/控制室/操作室功能（三选一）
+};
+
 if (typeof module !== "undefined") {
-  module.exports = { ROLES, ROLE_ID_SET, getRole };
+  module.exports = { ROLES, ROLE_ID_SET, getRole, ROLE_SKILL_LIMITS };
 }

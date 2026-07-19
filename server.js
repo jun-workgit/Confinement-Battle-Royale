@@ -4,7 +4,7 @@ const http = require("http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const { FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE } = require("./public/map-data.js");
-const { ROLE_ID_SET } = require("./public/roles-data.js");
+const { ROLE_ID_SET, ROLE_SKILL_LIMITS } = require("./public/roles-data.js");
 
 const STATE_FILE = path.join(__dirname, "game-state.json");
 const FLOOR_IDS = new Set(FLOORS.map((f) => f.id));
@@ -543,7 +543,8 @@ function buildSettlementLogEntries(state, draft) {
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+// extensions lets e.g. /simulator resolve to /simulator.html without a redirect.
+app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
 
 // Lightweight target for external uptime pings (e.g. cron-job.org) — avoids
 // the static-file/game-state overhead of hitting "/" just to keep the
@@ -633,6 +634,7 @@ wss.on("connection", (ws) => {
             health: DEFAULT_HEALTH,
             room: null,
             roleId: null,
+            skillUses: 0,
           })),
           round: 0,
           poisonFloors: [],
@@ -678,6 +680,21 @@ wss.on("connection", (ws) => {
           }
         }
         player.roleId = roleId;
+        player.skillUses = 0; // a reassigned role starts its own count fresh
+        break;
+      }
+      // Admin ticks a role's invokable-skill usage up/down by 1, clamped to
+      // ROLE_SKILL_LIMITS[roleId] (or unclamped above 0 if that role has no
+      // total-use cap). Purely a bookkeeping counter, visible to the player
+      // themselves too (read-only) -- no game effect is computed or applied
+      // here.
+      case "admin:adjustSkillUses": {
+        if (state.phase !== "in_progress") return;
+        const player = state.players.find((p) => p.id === Math.round(Number(msg.playerId)));
+        if (!player || !player.roleId || !(player.roleId in ROLE_SKILL_LIMITS)) return;
+        const cap = ROLE_SKILL_LIMITS[player.roleId];
+        const next = (player.skillUses || 0) + (Number(msg.delta) > 0 ? 1 : -1);
+        player.skillUses = cap === null ? Math.max(0, next) : Math.max(0, Math.min(cap, next));
         break;
       }
       case "admin:setPoisonDamageTable": {
@@ -853,6 +870,16 @@ wss.on("connection", (ws) => {
           sec.committed = false;
         }
         sec.data = computeSectionDefault(msg.section, draft.working, state);
+        break;
+      }
+      // Discards the whole draft outright -- unlike a per-section undo, this
+      // throws away every committed section too. Re-clicking 结算 calls
+      // startSettlementDraft() again, which (finding no draft for this round)
+      // builds a brand new one from scratch rather than resuming.
+      case "admin:cancelSettlement": {
+        const draft = state.settlementDraft;
+        if (!draft || draft.round !== state.round) return;
+        state.settlementDraft = null;
         break;
       }
       // Pushes the draft's working health/stats to the real (public)

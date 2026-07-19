@@ -347,6 +347,20 @@ function hackerRoleActionHtml(player) {
 // A player can always see their own assigned role — the admin's
 // rolesVisibleToPlayers toggle only controls the "(八) 职业介绍" reference
 // list on the Rules tab, not this per-player card.
+// Read-only display of a role's tracked skill-use count (see
+// ROLE_SKILL_LIMITS in roles-data.js) — admin is the only one who can
+// change it (玩家属性 tab); this is just so the player can see it themselves
+// without asking. Returns "" for roles with nothing tracked here.
+function roleSkillUsesHtml(player, lang) {
+  if (!(player.roleId in ROLE_SKILL_LIMITS)) return "";
+  const cap = ROLE_SKILL_LIMITS[player.roleId];
+  const used = player.skillUses || 0;
+  const text = cap === null
+    ? (lang === "en" ? `Used ${used} times (Unlimited)` : `已使用 ${used} 次（无限）`)
+    : (lang === "en" ? `Used ${used}/${cap}` : `已使用 ${used}/${cap}`);
+  return `<div class="role-card-skill-uses">${text}</div>`;
+}
+
 function roleCardHtml(player) {
   if (!player.roleId) return "";
   const role = getRole(player.roleId);
@@ -363,6 +377,7 @@ function roleCardHtml(player) {
         <div class="role-card-title">${t("roleSectionTitle")}</div>
         <div class="role-card-name">${name}</div>
         <div class="role-card-skill">${skill}</div>
+        ${roleSkillUsesHtml(player, lang)}
         <div class="role-card-desc">${roleDescLinesHtml(desc, "role-card-desc-line")}</div>
       </div>
     </div>`;

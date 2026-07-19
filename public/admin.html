@@ -36,9 +36,9 @@ let isEditing = false;
 let draft = null;
 let adminTab = "players";
 
-// Settlement (结算阶段) — purely local UI state; the actual draft lives
-// server-side (state.settlementDraft) so "取消结算" can exit this view
-// without losing any already-committed section (re-entering resumes it).
+// Settlement (结算阶段) — the actual draft lives server-side
+// (state.settlementDraft). "取消结算" discards it entirely (admin:cancelSettlement)
+// so re-entering always starts this round's settlement fresh, never mid-edit.
 let inSettlement = false;
 let expandedSettlementSection = "surgery";
 const SETTLEMENT_SECTIONS = [
@@ -255,11 +255,101 @@ function wireSettlementFooter(container, key) {
   }
 }
 
-function settlementHealthDelta(sec, playerId) {
-  return sec.committed && sec.applied ? (sec.applied.healthDeltas[playerId] || 0) : 0;
+// Before commit there's no sec.applied yet, so the "变化" column would just
+// show "-" — which hides exactly the number admin needs to sanity-check
+// before clicking 提交. previewSectionDeltas mirrors server.js's
+// commitSectionEffect math exactly (read-only, no mutation) so every section
+// can show its prospective delta ahead of time; the moment it's actually
+// committed, the real sec.applied (computed server-side) takes over instead.
+function computePoisonDamageClient(state) {
+  const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
+  const row = table.find((r) => r.round === state.round);
+  return row ? row.damage : 0;
 }
 
-function renderSurgerySection(container, sec, draft) {
+function previewSectionDeltas(key, sec, draft, state) {
+  const healthDeltas = {};
+  const statDeltas = {};
+  const bump = (id, dh) => { healthDeltas[id] = (healthDeltas[id] || 0) + dh; };
+  const find = (id) => draft.working.find((p) => p.id === id);
+
+  if (key === "surgery") {
+    if (sec.data.outcome === "success") {
+      for (const id of sec.data.playerIds) bump(id, 4);
+    }
+  } else if (key === "combat") {
+    for (const ev of sec.data.events) {
+      if (ev.kind === "single" || ev.kind === "multi") {
+        const players = ev.playerIds.map(find).filter(Boolean);
+        const maxPower = Math.max(...players.map((p) => p.stats.power));
+        for (const p of players) {
+          const dmg = maxPower - p.stats.power;
+          if (dmg > 0) bump(p.id, -dmg);
+        }
+      } else if (ev.kind === "shadow") {
+        const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
+        for (const p of ev.playerIds.map(find).filter((p) => p && p.health > 0)) {
+          bump(p.id, -shadowCount);
+        }
+      }
+    }
+  } else if (key === "poison") {
+    const damage = computePoisonDamageClient(state);
+    for (const p of draft.working) {
+      if (p.health > 0 && sec.data.floors.includes(roomFloorClient(p.room))) bump(p.id, -damage);
+    }
+  } else if (key === "hunger") {
+    if (state.round >= 2) {
+      for (const [playerId, t] of Object.entries(sec.data.toggles)) {
+        if (t.exempt) continue;
+        const missing = (t.water ? 0 : 1) + (t.food ? 0 : 1);
+        if (missing > 0) bump(Number(playerId), -missing);
+      }
+    }
+  } else if (key === "rocket") {
+    if (sec.data.room) {
+      for (const id of sec.data.playerIds) bump(id, -4);
+    }
+  } else if (key === "items") {
+    for (const [playerId, t] of Object.entries(sec.data.toggles)) {
+      const id = Number(playerId);
+      if (t.pill) bump(id, 2);
+      if (t.wine) {
+        if (t.wineResult === 3) statDeltas[id] = { ...statDeltas[id], power: 1 };
+        else if (t.wineResult === 4) statDeltas[id] = { ...statDeltas[id], speed: 1 };
+        else if (t.wineResult === 5) statDeltas[id] = { ...statDeltas[id], weight: 1 };
+        else if (t.wineResult === 6) bump(id, 2);
+      }
+    }
+  } else if (key === "revival") {
+    for (const [playerId, absorbed] of Object.entries(sec.data.absorbedThisRound)) {
+      bump(Number(playerId), absorbed);
+    }
+  }
+  return { healthDeltas, statDeltas, revivedIds: [] };
+}
+
+function settlementHealthDelta(deltas, playerId) {
+  return (deltas.healthDeltas && deltas.healthDeltas[playerId]) || 0;
+}
+
+// Pre-commit, draft.working hasn't been touched by this section yet, so the
+// preview delta projects FORWARD from the current health; post-commit,
+// working already reflects it, so the real delta is subtracted back OUT to
+// show what it was before. Same shape either way: {before, after}.
+function settlementBeforeAfter(committed, currentHealth, delta) {
+  return committed
+    ? { before: currentHealth - delta, after: currentHealth }
+    : { before: currentHealth, after: currentHealth + delta };
+}
+
+function settlementDeltaText(delta, icon, committed) {
+  if (!delta) return "-";
+  const text = `${icon}${delta > 0 ? "+" : ""}${delta}`;
+  return committed ? text : `<span class="settlement-preview-delta">${text}（预计）</span>`;
+}
+
+function renderSurgerySection(container, sec, draft, deltas) {
   const outcomeLabel = { success: "手术成功（在场每人 +4 生命）", fail: "手术失败，触发乱斗", none: "本轮无手术" }[sec.data.outcome];
   const involved = sec.data.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
   container.innerHTML = `
@@ -268,8 +358,9 @@ function renderSurgerySection(container, sec, draft) {
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${involved.map((p) => {
-          const delta = settlementHealthDelta(sec, p.id);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `❤️${delta > 0 ? "+" : ""}${delta}` : "-"}</td></tr>`;
+          const delta = settlementHealthDelta(deltas, p.id);
+          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "❤️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">B202 手术室内存活人数不足以触发手术。</div>`}
     ${settlementFooterHtml(sec)}
@@ -277,7 +368,7 @@ function renderSurgerySection(container, sec, draft) {
   wireSettlementFooter(container, "surgery");
 }
 
-function renderCombatSection(container, sec, draft) {
+function renderCombatSection(container, sec, draft, deltas) {
   const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
   const kindIcon = { single: "⚔️", multi: "⚔️", shadow: "👻" };
   container.innerHTML = `
@@ -289,8 +380,9 @@ function renderCombatSection(container, sec, draft) {
           <div style="overflow-x:auto;"><table class="stats-table">
             <thead><tr><th>玩家</th><th>武力</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
             <tbody>${players.map((p) => {
-              const delta = settlementHealthDelta(sec, p.id);
-              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}</td><td>${p.stats.power}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `${kindIcon[ev.kind]}${delta}` : "-"}</td></tr>`;
+              const delta = settlementHealthDelta(deltas, p.id);
+              const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}</td><td>${p.stats.power}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
             }).join("")}</tbody>
           </table></div>
         </div>`;
@@ -300,7 +392,7 @@ function renderCombatSection(container, sec, draft) {
   wireSettlementFooter(container, "combat");
 }
 
-function renderPoisonSection(container, sec, draft) {
+function renderPoisonSection(container, sec, draft, deltas) {
   const floors = sec.data.floors;
   const affected = draft.working.filter((p) => p.health > 0 && floors.includes(roomFloorClient(p.room)));
   const tallyEntries = Object.entries(sec.data.tally);
@@ -311,8 +403,9 @@ function renderPoisonSection(container, sec, draft) {
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>房间</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${affected.map((p) => {
-          const delta = settlementHealthDelta(sec, p.id);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `☠️${delta}` : "-"}</td></tr>`;
+          const delta = settlementHealthDelta(deltas, p.id);
+          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
     ${settlementFooterHtml(sec)}
@@ -320,7 +413,7 @@ function renderPoisonSection(container, sec, draft) {
   wireSettlementFooter(container, "poison");
 }
 
-function renderHungerSection(container, sec, draft, state) {
+function renderHungerSection(container, sec, draft, state, deltas) {
   const entries = Object.entries(sec.data.toggles);
   container.innerHTML = `
     ${state.round < 2 ? `<div style="color:#8b9482;font-size:13px;margin-bottom:12px;">第 2 回合起才需要上交水/粮，本轮不产生影响。</div>` : ""}
@@ -330,14 +423,15 @@ function renderHungerSection(container, sec, draft, state) {
         <tbody>${entries.map(([pid, t]) => {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
-          const delta = settlementHealthDelta(sec, pid);
+          const delta = settlementHealthDelta(deltas, pid);
+          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
           const locked = sec.committed || t.exempt;
           return `<tr>
             <td>${settlementPlayerLabel(pid)}</td>
             <td><input type="checkbox" class="settlement-hunger-toggle" data-pid="${pid}" data-field="water" ${t.water ? "checked" : ""} ${locked ? "disabled" : ""}></td>
             <td><input type="checkbox" class="settlement-hunger-toggle" data-pid="${pid}" data-field="food" ${t.food ? "checked" : ""} ${locked ? "disabled" : ""}></td>
             <td>${t.exempt ? "是（餐厅）" : "-"}</td>
-            <td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `🍽️${delta}` : "-"}</td>
+            <td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "🍽️", sec.committed)}</td>
           </tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家。</div>`}
@@ -354,7 +448,7 @@ function renderHungerSection(container, sec, draft, state) {
   wireSettlementFooter(container, "hunger");
 }
 
-function renderRocketSection(container, sec, draft) {
+function renderRocketSection(container, sec, draft, deltas) {
   const room = sec.data.room;
   const players = sec.data.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
   container.innerHTML = `
@@ -363,8 +457,9 @@ function renderRocketSection(container, sec, draft) {
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${players.map((p) => {
-          const delta = settlementHealthDelta(sec, p.id);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `🚀${delta}` : "-"}</td></tr>`;
+          const delta = settlementHealthDelta(deltas, p.id);
+          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">目标房间内无玩家，或本轮未设置目标。</div>`}
     ${settlementFooterHtml(sec)}
@@ -381,7 +476,7 @@ const SETTLEMENT_WINE_RESULTS = [
   { value: 6, label: "6：生命 +2" },
 ];
 
-function renderItemsSection(container, sec, draft) {
+function renderItemsSection(container, sec, draft, deltas) {
   const entries = Object.entries(sec.data.toggles);
   container.innerHTML = `
     ${entries.length ? `
@@ -390,7 +485,8 @@ function renderItemsSection(container, sec, draft) {
         <tbody>${entries.map(([pid, t]) => {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
-          const delta = settlementHealthDelta(sec, pid);
+          const delta = settlementHealthDelta(deltas, pid);
+          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
           const variance = [];
           if (t.pill) variance.push("💊+2");
           if (t.wine && t.wineResult === 6) variance.push("🍷+2");
@@ -410,7 +506,7 @@ function renderItemsSection(container, sec, draft) {
                  </select>`
               : "-"}</td>
             <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="adrenaline" ${t.adrenaline ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
-            <td>${p.health - delta}</td><td>${p.health}</td><td>${variance.join(" ") || "-"}</td>
+            <td>${before}</td><td>${after}</td><td>${variance.join(" ") || "-"}</td>
           </tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家。</div>`}
@@ -434,7 +530,7 @@ function renderItemsSection(container, sec, draft) {
   wireSettlementFooter(container, "items");
 }
 
-function renderRevivalSection(container, sec, draft) {
+function renderRevivalSection(container, sec, draft, deltas) {
   const entries = Object.entries(sec.data.absorbedThisRound);
   container.innerHTML = `
     ${entries.length ? `
@@ -443,9 +539,10 @@ function renderRevivalSection(container, sec, draft) {
         <tbody>${entries.map(([pid, absorbed]) => {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
-          const delta = settlementHealthDelta(sec, pid);
+          const delta = settlementHealthDelta(deltas, pid);
+          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
           const revived = sec.committed && sec.applied && sec.applied.revivedIds.includes(Number(pid));
-          return `<tr><td>${settlementPlayerLabel(pid)}</td><td>+${absorbed}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${revived ? "✅ 复活" : sec.committed ? "仍为暗影" : "-"}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(pid)}</td><td>+${absorbed}</td><td>${before}</td><td>${after}</td><td>${revived ? "✅ 复活" : sec.committed ? "仍为暗影" : "-"}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">本轮没有暗影玩家与存活玩家同处一室。</div>`}
     ${settlementFooterHtml(sec)}
@@ -455,13 +552,14 @@ function renderRevivalSection(container, sec, draft) {
 
 function renderSettlementSectionBody(container, key, draft, state) {
   const sec = draft.sections[key];
-  if (key === "surgery") renderSurgerySection(container, sec, draft);
-  else if (key === "combat") renderCombatSection(container, sec, draft);
-  else if (key === "poison") renderPoisonSection(container, sec, draft);
-  else if (key === "hunger") renderHungerSection(container, sec, draft, state);
-  else if (key === "rocket") renderRocketSection(container, sec, draft);
-  else if (key === "items") renderItemsSection(container, sec, draft);
-  else if (key === "revival") renderRevivalSection(container, sec, draft);
+  const deltas = sec.committed && sec.applied ? sec.applied : previewSectionDeltas(key, sec, draft, state);
+  if (key === "surgery") renderSurgerySection(container, sec, draft, deltas);
+  else if (key === "combat") renderCombatSection(container, sec, draft, deltas);
+  else if (key === "poison") renderPoisonSection(container, sec, draft, deltas);
+  else if (key === "hunger") renderHungerSection(container, sec, draft, state, deltas);
+  else if (key === "rocket") renderRocketSection(container, sec, draft, deltas);
+  else if (key === "items") renderItemsSection(container, sec, draft, deltas);
+  else if (key === "revival") renderRevivalSection(container, sec, draft, deltas);
 }
 
 function renderSettlementTab(tabBody, state) {
@@ -705,9 +803,13 @@ function renderDashboard(state) {
   const settlementCancelBtn = panel.querySelector("#settlement-cancel-btn");
   if (settlementCancelBtn) {
     settlementCancelBtn.addEventListener("click", () => {
-      // Client-side only — the server draft (and anything already
-      // committed within it) is untouched, so re-clicking "结算" resumes.
+      if (!confirm("确定要取消结算吗？本轮已提交的结算项目也会被清除，下次点击“结算”将从头开始。")) return;
+      // Discards the whole draft server-side (including anything already
+      // committed within it) — re-clicking "结算" starts fresh for this round.
+      socket.send({ type: "admin:cancelSettlement", password: adminPassword });
       inSettlement = false;
+      adminTab = "players";
+      expandedSettlementSection = "surgery";
       render();
     });
   }
@@ -749,7 +851,7 @@ function renderDashboard(state) {
         <div style="font-weight:700;font-size:16px;margin-bottom:12px;">玩家属性${isEditing ? "（编辑中，点击上方“确认”生效）" : "（实时）"}</div>
         <div style="overflow-x:auto;">
           <table class="stats-table">
-            <thead><tr><th>玩家</th><th>生命</th><th>状态</th><th>属性状态</th><th>位置</th><th>武力</th><th>速度</th><th>负重</th>${state.rolesEnabled ? "<th>职业</th>" : ""}</tr></thead>
+            <thead><tr><th>玩家</th><th>生命</th><th>状态</th><th>属性状态</th><th>位置</th><th>武力</th><th>速度</th><th>负重</th>${state.rolesEnabled ? "<th>职业</th><th>技能次数</th>" : ""}</tr></thead>
             <tbody id="players-tbody"></tbody>
           </table>
         </div>
@@ -1184,6 +1286,27 @@ function wirePlayerLogButtons(container, state) {
   });
 }
 
+// Immediate-effect +/- stepper for a role's tracked skill-use count (see
+// ROLE_SKILL_LIMITS in roles-data.js) — same "just a bookkeeping mark, not
+// part of the batched edit/confirm flow" pattern as the room-drag/role-assign
+// actions. Shows nothing for a role with no tracked skill (or no role at all).
+function skillUsesCellHtml(p, state) {
+  if (!p.roleId || !(p.roleId in ROLE_SKILL_LIMITS)) return "-";
+  const cap = ROLE_SKILL_LIMITS[p.roleId];
+  const used = p.skillUses || 0;
+  const label = cap === null ? `已用 ${used} 次（无限）` : `${used}/${cap}`;
+  // The server only accepts this once the game is in progress (skills are
+  // used during actual play, not prep) -- disable both steppers before then
+  // so a click doesn't silently no-op.
+  const locked = state.phase !== "in_progress";
+  return `
+    <div style="display:flex;align-items:center;gap:6px;justify-content:center;">
+      <button class="stepper-btn sm" data-skill-pid="${p.id}" data-skill-delta="-1" ${locked || used <= 0 ? "disabled" : ""}>－</button>
+      <span>${label}</span>
+      <button class="stepper-btn sm" data-skill-pid="${p.id}" data-skill-delta="1" ${locked || (cap !== null && used >= cap) ? "disabled" : ""}>＋</button>
+    </div>`;
+}
+
 function renderPlayersTable(tbody, state) {
   const roomCounts = {};
   for (const pl of state.players) {
@@ -1204,7 +1327,7 @@ function renderPlayersTable(tbody, state) {
         <td>${fieldStepperHtml(p.id, "power", d.stats.power)}</td>
         <td>${fieldStepperHtml(p.id, "speed", d.stats.speed)}</td>
         <td>${fieldStepperHtml(p.id, "weight", d.stats.weight)}</td>
-        ${state.rolesEnabled ? `<td>${roleAssignButtonHtml(p)}</td>` : ""}
+        ${state.rolesEnabled ? `<td>${roleAssignButtonHtml(p)}</td><td>${skillUsesCellHtml(p, state)}</td>` : ""}
       </tr>`;
     }
     const dead = p.health <= 0;
@@ -1218,7 +1341,7 @@ function renderPlayersTable(tbody, state) {
       <td class="${sumClass}">${p.stats.power}</td>
       <td>${p.stats.speed}</td>
       <td>${p.stats.weight}</td>
-      ${state.rolesEnabled ? `<td>${roleAssignButtonHtml(p)}</td>` : ""}
+      ${state.rolesEnabled ? `<td>${roleAssignButtonHtml(p)}</td><td>${skillUsesCellHtml(p, state)}</td>` : ""}
     </tr>`;
   }).join("");
 
@@ -1227,6 +1350,16 @@ function renderPlayersTable(tbody, state) {
       btn.addEventListener("click", () => {
         const player = state.players.find((pp) => pp.id === Number(btn.dataset.pid));
         if (player) openRoleAssignModal(player, state);
+      });
+    });
+    tbody.querySelectorAll("[data-skill-pid]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        socket.send({
+          type: "admin:adjustSkillUses",
+          playerId: Number(btn.dataset.skillPid),
+          delta: Number(btn.dataset.skillDelta),
+          password: adminPassword,
+        });
       });
     });
   }

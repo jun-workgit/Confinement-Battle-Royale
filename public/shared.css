@@ -238,6 +238,7 @@ html, body {
 .settlement-event-group { margin-bottom: 16px; }
 .settlement-event-group:last-child { margin-bottom: 0; }
 .settlement-footer { display: flex; gap: 10px; margin-top: 14px; }
+.settlement-preview-delta { color: #d8b258; font-style: italic; }
 
 /* --- Stats --- */
 .stats-wrap { display: flex; justify-content: center; }
@@ -359,6 +360,11 @@ html, body {
 .role-card-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #8b9482; text-transform: uppercase; margin-bottom: 4px; }
 .role-card-name { font-weight: 800; font-size: 17px; color: #d8b258; margin-bottom: 4px; }
 .role-card-skill { font-weight: 700; font-size: 13px; color: #eef0f2; margin-bottom: 8px; }
+.role-card-skill-uses {
+  display: inline-block; font-size: 12px; color: #d8b258; font-weight: 700;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(216,178,88,0.4);
+  background: rgba(216,178,88,0.1); margin-bottom: 10px;
+}
 .role-card-desc-line { font-size: 13px; line-height: 1.55; color: #c9ccd1; margin-bottom: 3px; }
 .role-card-desc-line:last-child { margin-bottom: 0; }
 
