@@ -3,7 +3,10 @@ const path = require("path");
 const http = require("http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
-const { FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE } = require("./public/map-data.js");
+const {
+  FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE,
+  UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun,
+} = require("./public/map-data.js");
 const { ROLE_ID_SET, ROLE_SKILL_LIMITS } = require("./public/roles-data.js");
 
 const STATE_FILE = path.join(__dirname, "game-state.json");
@@ -209,6 +212,14 @@ function roomFloor(roomId) {
   return "1"; // 101, 102, 103, 104
 }
 
+// Items live on the real state.players (not the settlement draft) since
+// admin doesn't edit inventory mid-settlement -- combat/poison math just
+// reads them directly by id.
+function playerItems(state, playerId) {
+  const p = state.players.find((pp) => pp.id === playerId);
+  return (p && p.items) || defaultPlayerItems();
+}
+
 function draftPlayerSnapshot(players) {
   return players.map((p) => ({
     id: p.id,
@@ -330,19 +341,46 @@ function commitSectionEffect(section, data, working, state) {
   const statDeltas = {};
   const bump = (id, dh) => { healthDeltas[id] = (healthDeltas[id] || 0) + dh; };
   const find = (id) => working.find((p) => p.id === id);
+  let combatAutoLoss = null;
 
   if (section === "surgery") {
     if (data.outcome === "success") {
       for (const id of data.playerIds) bump(id, 4);
     }
   } else if (section === "combat") {
+    combatAutoLoss = {};
     for (const ev of data.events) {
-      if (ev.kind === "single" || ev.kind === "multi") {
+      if (ev.kind === "single") {
+        // 8/9's "若交战时对方无枪，则无需比较武力，对方直接扣除等同己方武力
+        // 的生命值" rule only has a clean 1-attacker/1-defender reading for a
+        // 2-player duel -- see the "multi" branch below for why a 3+ brawl
+        // just uses effective power in the normal comparison instead.
+        const [aId, bId] = ev.playerIds;
+        const a = find(aId), b = find(bId);
+        if (!a || !b) continue;
+        const aItems = playerItems(state, aId);
+        const bItems = playerItems(state, bId);
+        const aPower = a.stats.power + weaponPowerBonus(aItems);
+        const bPower = b.stats.power + weaponPowerBonus(bItems);
+        const aGun = hasGun(aItems);
+        const bGun = hasGun(bItems);
+        if (aGun && !bGun) {
+          bump(bId, -aPower);
+          combatAutoLoss[bId] = true;
+        } else if (bGun && !aGun) {
+          bump(aId, -bPower);
+          combatAutoLoss[aId] = true;
+        } else {
+          if (aPower > bPower) bump(bId, -(aPower - bPower));
+          else if (bPower > aPower) bump(aId, -(bPower - aPower));
+        }
+      } else if (ev.kind === "multi") {
         const players = ev.playerIds.map(find).filter(Boolean);
-        const maxPower = Math.max(...players.map((p) => p.stats.power));
-        for (const p of players) {
-          const dmg = maxPower - p.stats.power;
-          if (dmg > 0) bump(p.id, -dmg);
+        const powers = players.map((p) => ({ id: p.id, power: p.stats.power + weaponPowerBonus(playerItems(state, p.id)) }));
+        const maxPower = Math.max(...powers.map((x) => x.power));
+        for (const { id, power } of powers) {
+          const dmg = maxPower - power;
+          if (dmg > 0) bump(id, -dmg);
         }
       } else if (ev.kind === "shadow") {
         const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
@@ -354,7 +392,8 @@ function commitSectionEffect(section, data, working, state) {
   } else if (section === "poison") {
     const damage = poisonDamageForRound(state.poisonDamageTable, state.round);
     for (const p of working) {
-      if (p.health > 0 && data.floors.includes(roomFloor(p.room))) bump(p.id, -damage);
+      // 11's 防毒面具 (gas mask) holder is immune to poison-gas damage entirely.
+      if (p.health > 0 && data.floors.includes(roomFloor(p.room)) && !playerItems(state, p.id).gasMask) bump(p.id, -damage);
     }
   } else if (section === "hunger") {
     if (state.round >= 2) {
@@ -390,7 +429,18 @@ function commitSectionEffect(section, data, working, state) {
 
   for (const [id, dh] of Object.entries(healthDeltas)) {
     const p = find(Number(id));
-    if (p) p.health += dh;
+    if (!p) continue;
+    const realPlayer = state.players.find((pp) => pp.id === Number(id));
+    // 肾上腺素's "next round can't die" protection -- floors this section's
+    // damage at 1 health for whoever used it last round. The recorded delta
+    // is corrected to the actual (possibly clamped) change so undo/logs stay
+    // accurate regardless of what the raw math would have done.
+    const protectedNow = realPlayer && realPlayer.adrenalineProtectedRound === state.round;
+    const before = p.health;
+    let after = before + dh;
+    if (protectedNow && after < 1) after = 1;
+    p.health = after;
+    healthDeltas[id] = after - before;
   }
   for (const [id, ds] of Object.entries(statDeltas)) {
     const p = find(Number(id));
@@ -416,6 +466,9 @@ function commitSectionEffect(section, data, working, state) {
   if (section === "poison") {
     extra.previousPoisonFloors = [...state.poisonFloors];
     state.poisonFloors = [...new Set([...state.poisonFloors, ...data.floors])];
+  }
+  if (section === "combat" && combatAutoLoss && Object.keys(combatAutoLoss).length) {
+    extra.autoLoss = combatAutoLoss;
   }
 
   return { healthDeltas, statDeltas, revivedIds, extra };
@@ -515,7 +568,8 @@ function buildSettlementLogEntries(state, draft) {
         room = "B202";
       } else if (key === "combat") {
         const ev = sec.data.events.find((e) => e.playerIds.includes(id));
-        detail = { kind: ev ? ev.kind : null };
+        const autoLoss = !!(sec.applied.extra && sec.applied.extra.autoLoss && sec.applied.extra.autoLoss[id]);
+        detail = { kind: ev ? ev.kind : null, autoLoss };
         room = ev ? ev.room : null;
       } else if (key === "poison") {
         const wp = draft.working.find((p) => p.id === id);
@@ -638,6 +692,12 @@ wss.on("connection", (ws) => {
             room: null,
             roleId: null,
             skillUses: 0,
+            items: defaultPlayerItems(),
+            // Set by admin:finishSettlement when 肾上腺素 was used this round --
+            // the round number during which that player can't drop below 1
+            // health, checked as `=== state.round` (see the clamp in the
+            // healthDeltas-apply loop inside commitSectionEffect).
+            adrenalineProtectedRound: null,
           })),
           round: 0,
           poisonFloors: [],
@@ -698,6 +758,31 @@ wss.on("connection", (ws) => {
         const cap = ROLE_SKILL_LIMITS[player.roleId];
         const next = (player.skillUses || 0) + (Number(msg.delta) > 0 ? 1 : -1);
         player.skillUses = cap === null ? Math.max(0, next) : Math.max(0, Math.min(cap, next));
+        break;
+      }
+      // Admin edits one player's item-card inventory (道具卡 7-14) from the
+      // bag-icon modal. Knife/pistol/shotgun are stackable counts; the other
+      // five exist as exactly ONE copy in the whole game, so setting one to
+      // true here vacates it from whoever else was holding it.
+      case "admin:setPlayerItems": {
+        if (state.phase !== "prep" && state.phase !== "in_progress") return;
+        const player = state.players.find((p) => p.id === Math.round(Number(msg.playerId)));
+        if (!player || typeof msg.items !== "object" || !msg.items) return;
+        const next = { ...defaultPlayerItems() };
+        for (const key of STACKABLE_ITEM_KEYS) {
+          next[key] = Math.max(0, Math.round(Number(msg.items[key]) || 0));
+        }
+        for (const key of UNIQUE_ITEM_KEYS) {
+          next[key] = !!msg.items[key];
+        }
+        for (const key of UNIQUE_ITEM_KEYS) {
+          if (next[key]) {
+            for (const other of state.players) {
+              if (other.id !== player.id) other.items[key] = false;
+            }
+          }
+        }
+        player.items = next;
         break;
       }
       case "admin:setPoisonDamageTable": {
@@ -898,6 +983,17 @@ wss.on("connection", (ws) => {
           if (!p) continue;
           p.health = wp.health;
           p.stats = { ...wp.stats };
+        }
+        // 肾上腺素 used THIS round protects the player during the NEXT one --
+        // set the flag before advancing state.round below (irrelevant if
+        // this was the final round, since there is no next one to protect).
+        if (state.round < MAX_ROUND) {
+          const nextRound = state.round + 1;
+          for (const [idStr, t] of Object.entries(draft.sections.items.data.toggles)) {
+            if (!t.adrenaline) continue;
+            const p = state.players.find((pp) => pp.id === Number(idStr));
+            if (p) p.adrenalineProtectedRound = nextRound;
+          }
         }
         state.settlementDraft = null;
         state.floorVotes = {};

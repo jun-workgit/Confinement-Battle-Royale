@@ -272,6 +272,20 @@ html, body {
 .wine-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 .wine-picker-caption { font-size: 11px; color: #8b9482; white-space: nowrap; }
 
+/* Item-card inventory editor modal (玩家属性's 🎒 icon). */
+.modal-card.inventory-modal { width: 420px; max-width: 92vw; }
+.inventory-stackable-grid { display: flex; flex-direction: column; gap: 10px; }
+.inventory-stackable-row { display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
+.inventory-unique-grid { display: flex; flex-direction: column; gap: 8px; }
+.inventory-unique-chip {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid rgba(214,218,224,0.2); cursor: pointer; font-size: 14px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.inventory-unique-chip:hover { border-color: #d8b258; }
+.inventory-unique-chip.selected { background: rgba(76,175,80,0.15); border-color: #4caf50; }
+.inventory-holder-note { color: #8b9482; font-size: 12px; }
+
 /* --- Stats --- */
 .stats-wrap { display: flex; justify-content: center; }
 .stats-col { display: flex; flex-direction: column; gap: 22px; width: 460px; max-width: 100%; }

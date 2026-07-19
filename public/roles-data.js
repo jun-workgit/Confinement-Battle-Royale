@@ -156,7 +156,9 @@ function getRole(roleId) {
 // for at all, like 富豪/雇佣兵/饮品师). null = no total-game cap (usable
 // every round, only naturally bounded by the 6-round game length) — shown
 // as "unlimited" rather than an x/n count. Roles not listed here have
-// nothing here worth tracking as a simple counter.
+// nothing here worth tracking as a simple counter -- 化学家's skill has no
+// total-use cap either, but with nothing to count against, an "unlimited"
+// badge added no value, so it's intentionally left untracked.
 //
 // hacker's 1 here is its SECOND ability (基因室/控制室/操作室 一次性三选一)
 // -- its room-disable ability is a separate, already-implemented per-round
@@ -166,7 +168,6 @@ const ROLE_SKILL_LIMITS = {
   hypnotist: 4,     // 催眠师 · 催眠治疗
   detective: 3,     // 私家侦探 · 秘密跟踪
   prophet: 6,       // 预言家 · 死亡预告
-  chemist: null,    // 化学家 · 毒性调和
   hacker: 1,        // 黑客 · 基因室/控制室/操作室功能（三选一）
 };
 

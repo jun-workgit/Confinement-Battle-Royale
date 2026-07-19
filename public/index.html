@@ -313,10 +313,11 @@ function renderPortraitHealthHtml(player) {
       </div>`;
   }
   const pct = Math.max(0, Math.min(100, (player.health / DEFAULT_HEALTH) * 100));
+  const protectedNow = latestState && player.adrenalineProtectedRound === latestState.round;
   return `
     <div class="portrait-health">
       <div class="stat-bar-track health"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
-      <div class="portrait-health-label">${t("healthLabel")}<b>${player.health}</b></div>
+      <div class="portrait-health-label">${t("healthLabel")}<b>${player.health}</b>${protectedNow ? ` <span title="肾上腺素保护中：本轮生命不会低于1" style="color:#4caf50;">🛡️</span>` : ""}</div>
     </div>`;
 }
 
@@ -459,6 +460,17 @@ function renderStatsReadonly(container, player) {
         ${STAT_DEFS.map((d) => {
           const v = stats[d.id] || 0;
           const pct = (v / STAT_POINTS_TOTAL) * 100;
+          const items = player.items;
+          const protectedNow = latestState && player.adrenalineProtectedRound === latestState.round;
+          let valueHtml = `${v}`;
+          if (d.id === "power") {
+            const badges = weaponBadgesHtml(items);
+            if (badges) valueHtml = `${v} <span style="font-size:11px;color:#8b9482;">${badges}</span>`;
+          } else if (d.id === "weight" && items && items.dimensionalPocket) {
+            valueHtml = "∞";
+          } else if (d.id === "speed" && protectedNow) {
+            valueHtml = `<span style="color:#d8b258;">💉10</span>`;
+          }
           return `
           <div class="stat-row-v2">
             <div class="diamond-badge"><span>${d.icon}</span></div>
@@ -466,7 +478,7 @@ function renderStatsReadonly(container, player) {
               <div class="stat-row-v2-label">${lang === "en" ? d.labelEn : d.label}</div>
               <div class="stat-bar-track"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
             </div>
-            <div class="stat-row-v2-value">${v}</div>
+            <div class="stat-row-v2-value">${valueHtml}</div>
           </div>`;
         }).join("")}
       </div>

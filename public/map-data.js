@@ -749,6 +749,61 @@ function renderMeeples(wrapEl, players) {
   return layer;
 }
 
+// Item-card inventory (道具卡 7-14) -- shared by server.js (combat/poison
+// math) and the admin/player views (display + the bag-icon editor). knife/
+// pistol/shotgun stack (a player can hold several); the other five exist as
+// exactly ONE copy in the whole game, so assigning one to a player vacates
+// it from whoever had it before (see admin:setPlayerItems in server.js).
+const ITEM_DEFS = {
+  knife: { icon: "🔪", label: "刀", power: 2, stackable: true },
+  pistol: { icon: "🔫", label: "手枪", power: 2, stackable: true },
+  shotgun: { icon: "💥", label: "霰弹枪", power: 4, stackable: true },
+  rope: { icon: "🪢", label: "绳索", stackable: false },
+  gasMask: { icon: "😷", label: "防毒面具", stackable: false },
+  rocketLauncher: { icon: "🚀", label: "火箭筒", stackable: false },
+  dimensionalPocket: { icon: "🌀", label: "次元口袋", stackable: false },
+  recycler: { icon: "♻️", label: "循环回收装置", stackable: false },
+};
+const UNIQUE_ITEM_KEYS = ["rope", "gasMask", "rocketLauncher", "dimensionalPocket", "recycler"];
+const STACKABLE_ITEM_KEYS = ["knife", "pistol", "shotgun"];
+
+function defaultPlayerItems() {
+  return { knife: 0, pistol: 0, shotgun: 0, rope: false, gasMask: false, rocketLauncher: false, dimensionalPocket: false, recycler: false };
+}
+
+// 刀/手枪/霰弹枪 all add flat +power per copy held (7/8/9's "持该道具卡的
+// 玩家武力+2/+2/+4"), on top of the player's own gene-allocated 武力 --
+// never mutates the stored stat itself, only used at the point of use
+// (combat math, and the display annotations that mirror it).
+function weaponPowerBonus(items) {
+  if (!items) return 0;
+  return ITEM_DEFS.knife.power * (items.knife || 0)
+    + ITEM_DEFS.pistol.power * (items.pistol || 0)
+    + ITEM_DEFS.shotgun.power * (items.shotgun || 0);
+}
+
+// "枪" (a gun) for the 8/9 no-gun-opponent rule means pistol or shotgun
+// specifically -- a knife is a blade, not a gun, so it never triggers or
+// blocks that rule on its own.
+function hasGun(items) {
+  return !!items && ((items.pistol || 0) > 0 || (items.shotgun || 0) > 0);
+}
+
+// Compact "🔪+4 🔫+2" style annotation next to a displayed 武力 value --
+// shown alongside the base stat, never folded into it, in both admin and
+// player views. Empty string when the player carries no weapon cards.
+function weaponBadgesHtml(items) {
+  if (!items) return "";
+  const parts = [];
+  if (items.knife > 0) parts.push(`${ITEM_DEFS.knife.icon}+${ITEM_DEFS.knife.power * items.knife}`);
+  if (items.pistol > 0) parts.push(`${ITEM_DEFS.pistol.icon}+${ITEM_DEFS.pistol.power * items.pistol}`);
+  if (items.shotgun > 0) parts.push(`${ITEM_DEFS.shotgun.icon}+${ITEM_DEFS.shotgun.power * items.shotgun}`);
+  return parts.join(" ");
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { FLOORS, ROOMS, ROOM_LABELS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, TRANSIT_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, meepleColor };
+  module.exports = {
+    FLOORS, ROOMS, ROOM_LABELS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, TRANSIT_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, meepleColor,
+    ITEM_DEFS, UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun, weaponBadgesHtml,
+  };
 }
