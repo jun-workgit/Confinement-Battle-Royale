@@ -36,6 +36,12 @@ let isEditing = false;
 let draft = null;
 let adminTab = "players";
 
+// The setup screen's 玩家人数 input, kept outside renderSetup() so it
+// survives a re-render -- selecting/toggling a role sends admin:setRoleConfig,
+// which broadcasts new state and re-renders the whole setup screen, which
+// would otherwise reset the input back to its hardcoded default value.
+let setupPlayerCount = 6;
+
 // Settlement (结算阶段) — the actual draft lives server-side
 // (state.settlementDraft). "取消结算" discards it entirely (admin:cancelSettlement)
 // so re-entering always starts this round's settlement fresh, never mid-edit.
@@ -657,7 +663,7 @@ function renderSetup(state) {
         <div style="font-weight:700;font-size:16px;">创建游戏</div>
         <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#c9ccd1;">
           玩家人数
-          <input type="number" id="player-count" min="1" max="200" value="6">
+          <input type="number" id="player-count" min="1" max="200" value="${setupPlayerCount}">
         </label>
         <button class="btn" id="create-btn">创建游戏</button>
       </div>
@@ -676,7 +682,7 @@ function renderSetup(state) {
           </label>
           <div style="font-size:13px;margin-bottom:10px;">
             已选择 <span id="role-count-label" style="color:#d8b258;font-weight:700;">${selectedRoles.length}</span> /
-            <span id="role-need-label" style="color:#d8b258;font-weight:700;">6</span> 个职业（需与玩家人数一致）
+            <span id="role-need-label" style="color:#d8b258;font-weight:700;">${setupPlayerCount}</span> 个职业（需与玩家人数一致）
           </div>
           <div class="role-select-grid">
             ${ROLES.map((r) => `
@@ -716,6 +722,7 @@ function renderSetup(state) {
   const roleNeedLabel = panel.querySelector("#role-need-label");
   if (roleNeedLabel) roleNeedLabel.textContent = playerCountInput.value;
   playerCountInput.addEventListener("input", () => {
+    setupPlayerCount = Number(playerCountInput.value) || 0;
     if (roleNeedLabel) roleNeedLabel.textContent = playerCountInput.value;
   });
 
