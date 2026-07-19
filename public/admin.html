@@ -349,6 +349,17 @@ function settlementDeltaText(delta, icon, committed) {
   return committed ? text : `<span class="settlement-preview-delta">${text}（预计）</span>`;
 }
 
+function settlementHealthText(value) {
+  return `❤️${value}`;
+}
+
+// Switch-styled checkbox — same semantics/events as a plain checkbox (the
+// class/data-* attributes and "checked"/"disabled" state are unchanged), just
+// wrapped for the toggle-switch look instead of a bare square checkbox.
+function settlementSwitchHtml(cls, dataAttrs, checked, disabled) {
+  return `<label class="switch"><input type="checkbox" class="${cls}" ${dataAttrs} ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}><span class="switch-slider"></span></label>`;
+}
+
 function renderSurgerySection(container, sec, draft, deltas) {
   const outcomeLabel = { success: "手术成功（在场每人 +4 生命）", fail: "手术失败，触发乱斗", none: "本轮无手术" }[sec.data.outcome];
   const involved = sec.data.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
@@ -360,7 +371,7 @@ function renderSurgerySection(container, sec, draft, deltas) {
         <tbody>${involved.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
           const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "❤️", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "❤️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">B202 手术室内存活人数不足以触发手术。</div>`}
     ${settlementFooterHtml(sec)}
@@ -382,7 +393,7 @@ function renderCombatSection(container, sec, draft, deltas) {
             <tbody>${players.map((p) => {
               const delta = settlementHealthDelta(deltas, p.id);
               const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
-              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}</td><td>${p.stats.power}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}</td><td>${p.stats.power}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
             }).join("")}</tbody>
           </table></div>
         </div>`;
@@ -405,7 +416,7 @@ function renderPoisonSection(container, sec, draft, deltas) {
         <tbody>${affected.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
           const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
     ${settlementFooterHtml(sec)}
@@ -419,19 +430,21 @@ function renderHungerSection(container, sec, draft, state, deltas) {
     ${state.round < 2 ? `<div style="color:#8b9482;font-size:13px;margin-bottom:12px;">第 2 回合起才需要上交水/粮，本轮不产生影响。</div>` : ""}
     ${entries.length ? `
       <div style="overflow-x:auto;"><table class="stats-table">
-        <thead><tr><th>玩家</th><th>水</th><th>粮</th><th>B204 豁免</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+        <thead><tr><th>玩家</th><th>水</th><th>粮</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${entries.map(([pid, t]) => {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
           const delta = settlementHealthDelta(deltas, pid);
           const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
           const locked = sec.committed || t.exempt;
+          const waterFoodCells = t.exempt
+            ? `<td colspan="2" style="color:#8b9482;">在 B204 餐厅</td>`
+            : `<td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="water"`, t.water, locked)}</td>
+               <td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="food"`, t.food, locked)}</td>`;
           return `<tr>
             <td>${settlementPlayerLabel(pid)}</td>
-            <td><input type="checkbox" class="settlement-hunger-toggle" data-pid="${pid}" data-field="water" ${t.water ? "checked" : ""} ${locked ? "disabled" : ""}></td>
-            <td><input type="checkbox" class="settlement-hunger-toggle" data-pid="${pid}" data-field="food" ${t.food ? "checked" : ""} ${locked ? "disabled" : ""}></td>
-            <td>${t.exempt ? "是（餐厅）" : "-"}</td>
-            <td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "🍽️", sec.committed)}</td>
+            ${waterFoodCells}
+            <td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🍽️", sec.committed)}</td>
           </tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家。</div>`}
@@ -459,7 +472,7 @@ function renderRocketSection(container, sec, draft, deltas) {
         <tbody>${players.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
           const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${before}</td><td>${after}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">目标房间内无玩家，或本轮未设置目标。</div>`}
     ${settlementFooterHtml(sec)}
@@ -488,8 +501,8 @@ function renderItemsSection(container, sec, draft, deltas) {
           const delta = settlementHealthDelta(deltas, pid);
           const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
           const variance = [];
-          if (t.pill) variance.push("💊+2");
-          if (t.wine && t.wineResult === 6) variance.push("🍷+2");
+          if (t.pill) variance.push("💊生命+2");
+          if (t.wine && t.wineResult === 6) variance.push("🍷生命+2");
           if (t.wine && t.wineResult === 3) variance.push("🍷武力+1");
           if (t.wine && t.wineResult === 4) variance.push("🍷速度+1");
           if (t.wine && t.wineResult === 5) variance.push("🍷负重+1");
@@ -497,16 +510,16 @@ function renderItemsSection(container, sec, draft, deltas) {
           if (t.adrenaline) variance.push("💉下轮保护");
           return `<tr>
             <td>${settlementPlayerLabel(pid)}</td>
-            <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="pill" ${t.pill ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
-            <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="wine" ${t.wine ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
+            <td>${settlementSwitchHtml("settlement-item-toggle", `data-pid="${pid}" data-field="pill"`, t.pill, sec.committed)}</td>
+            <td>${settlementSwitchHtml("settlement-item-toggle", `data-pid="${pid}" data-field="wine"`, t.wine, sec.committed)}</td>
             <td>${t.wine
               ? `<select class="settlement-wine-result" data-pid="${pid}" ${sec.committed ? "disabled" : ""}>
                    <option value="">选择骰子结果</option>
                    ${SETTLEMENT_WINE_RESULTS.map((w) => `<option value="${w.value}" ${t.wineResult === w.value ? "selected" : ""}>${w.label}</option>`).join("")}
                  </select>`
               : "-"}</td>
-            <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="adrenaline" ${t.adrenaline ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
-            <td>${before}</td><td>${after}</td><td>${variance.join(" ") || "-"}</td>
+            <td>${settlementSwitchHtml("settlement-item-toggle", `data-pid="${pid}" data-field="adrenaline"`, t.adrenaline, sec.committed)}</td>
+            <td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${variance.join(" ") || "-"}</td>
           </tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家。</div>`}
@@ -542,7 +555,7 @@ function renderRevivalSection(container, sec, draft, deltas) {
           const delta = settlementHealthDelta(deltas, pid);
           const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
           const revived = sec.committed && sec.applied && sec.applied.revivedIds.includes(Number(pid));
-          return `<tr><td>${settlementPlayerLabel(pid)}</td><td>+${absorbed}</td><td>${before}</td><td>${after}</td><td>${revived ? "✅ 复活" : sec.committed ? "仍为暗影" : "-"}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(pid)}</td><td>+${absorbed}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${revived ? "✅ 复活" : sec.committed ? "仍为暗影" : "-"}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">本轮没有暗影玩家与存活玩家同处一室。</div>`}
     ${settlementFooterHtml(sec)}

@@ -240,6 +240,24 @@ html, body {
 .settlement-footer { display: flex; gap: 10px; margin-top: 14px; }
 .settlement-preview-delta { color: #d8b258; font-style: italic; }
 
+/* Toggle switch — used in place of bare checkboxes in the settlement
+   accordions (hunger, items) for a clearer on/off look. */
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; vertical-align: middle; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch-slider {
+  position: absolute; inset: 0; border-radius: 999px; pointer-events: none;
+  background: rgba(255,255,255,0.15); border: 1px solid rgba(214,218,224,0.25);
+  transition: background 0.15s, border-color 0.15s;
+}
+.switch-slider::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #dfe1e4; transition: transform 0.15s;
+}
+.switch input:checked + .switch-slider { background: #d62839; border-color: #d62839; }
+.switch input:checked + .switch-slider::before { transform: translateX(18px); background: #fff; }
+.switch input:disabled + .switch-slider { opacity: 0.45; }
+.switch input:disabled { cursor: not-allowed; }
+
 /* --- Stats --- */
 .stats-wrap { display: flex; justify-content: center; }
 .stats-col { display: flex; flex-direction: column; gap: 22px; width: 460px; max-width: 100%; }

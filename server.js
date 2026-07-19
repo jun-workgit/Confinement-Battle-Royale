@@ -283,8 +283,11 @@ function computeSectionDefault(section, working, state) {
       const toggles = {};
       for (const p of working) {
         if (p.health <= 0) continue; // shadows don't hand in water/food
+        // Opt-in: admin actively checks a player off as having handed
+        // water/food in, rather than un-checking those who didn't. A B204
+        // player is exempt either way, so their toggles start (and stay) true.
         const exempt = p.room === "B204";
-        toggles[p.id] = { water: true, food: true, exempt };
+        toggles[p.id] = { water: exempt, food: exempt, exempt };
       }
       return { toggles };
     }
