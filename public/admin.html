@@ -831,8 +831,9 @@ function renderDashboard(state) {
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">排行榜（存活优先，其次比生命值）</div>
-        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { showRoles: state.rolesEnabled })}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { showRoles: state.rolesEnabled, showLogButton: true })}</div>
       </div>`;
+    wirePlayerLogButtons(tabBody, state);
   } else if (adminTab === "rules") {
     renderGameRules(tabBody, state);
   } else if (adminTab === "timer") {
@@ -1095,6 +1096,94 @@ function openRoleAssignModal(p, state) {
   });
 }
 
+// Human-readable label for one playerLogs entry's source/detail — mirrors
+// the wording used in the settlement accordions themselves so admin can
+// cross-reference a log line against what they saw while settling that round.
+function playerLogSourceLabel(entry) {
+  switch (entry.source) {
+    case "surgery": return "手术室 · 手术成功";
+    case "combat": {
+      const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
+      return `战斗 · ${kindLabel[entry.detail.kind] || entry.detail.kind || ""}`;
+    }
+    case "poison": return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}`;
+    case "hunger": {
+      const missing = [];
+      if (entry.detail.missingWater) missing.push("缺水");
+      if (entry.detail.missingFood) missing.push("缺粮");
+      return `水粮上交 · ${missing.join("、") || "-"}`;
+    }
+    case "rocket": return "火箭筒袭击";
+    case "items": {
+      const parts = [];
+      if (entry.detail.pill) parts.push("药片");
+      if (entry.detail.wine) parts.push(`酒（骰子${entry.detail.wineResult != null ? entry.detail.wineResult : "?"}）`);
+      if (entry.detail.adrenaline) parts.push("肾上腺素");
+      return `道具卡 · ${parts.join("、") || "-"}`;
+    }
+    case "revival": return `暗影复活 · 吸收 ${entry.detail.absorbed}${entry.detail.revived ? "（已复活）" : "（尚未复活）"}`;
+    case "manual": return "管理员手动调整";
+    default: return entry.source;
+  }
+}
+
+function playerLogStatText(statDeltas) {
+  if (!statDeltas) return "-";
+  const parts = [];
+  if (statDeltas.power) parts.push(`武力${statDeltas.power > 0 ? "+" : ""}${statDeltas.power}`);
+  if (statDeltas.speed) parts.push(`速度${statDeltas.speed > 0 ? "+" : ""}${statDeltas.speed}`);
+  if (statDeltas.weight) parts.push(`负重${statDeltas.weight > 0 ? "+" : ""}${statDeltas.weight}`);
+  return parts.join("，") || "-";
+}
+
+// Read-only audit trail for one player: every REAL (committed) health/stat
+// change, grouped by round in chronological order. Uncommitted or undone
+// settlement work never reaches state.playerLogs (see buildSettlementLogEntries
+// in server.js), so what's shown here is exactly what actually happened —
+// this is the tool for admin to double-check a round's math after the fact.
+function openPlayerLogModal(playerId, state) {
+  const logs = (state.playerLogs && state.playerLogs[playerId]) || [];
+  const byRound = {};
+  for (const entry of logs) {
+    (byRound[entry.round] = byRound[entry.round] || []).push(entry);
+  }
+  const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info player-log-modal">
+      <div class="modal-title">玩家 ${playerId} · 状态变化日志</div>
+      ${rounds.length ? rounds.map((r) => `
+        <div class="player-log-round">
+          <div class="player-log-round-title">第 ${r} 回合</div>
+          <div style="overflow-x:auto;"><table class="stats-table">
+            <thead><tr><th>来源</th><th>位置</th><th>生命变化</th><th>属性变化</th></tr></thead>
+            <tbody>${byRound[r].map((entry) => `
+              <tr>
+                <td>${playerLogSourceLabel(entry)}</td>
+                <td>${entry.room ? getRoomLabel(entry.room) : "-"}</td>
+                <td>${entry.healthDelta ? `${entry.healthBefore} → ${entry.healthAfter}（${entry.healthDelta > 0 ? "+" : ""}${entry.healthDelta}）` : "-"}</td>
+                <td>${playerLogStatText(entry.statDeltas)}</td>
+              </tr>`).join("")}</tbody>
+          </table></div>
+        </div>`).join("") : `<div style="color:#8b9482;text-align:center;padding:20px 0;">暂无记录</div>`}
+      <div class="modal-actions">
+        <button class="btn secondary player-log-close">关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".player-log-close").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+}
+
+function wirePlayerLogButtons(container, state) {
+  container.querySelectorAll(".log-btn[data-log-pid]").forEach((btn) => {
+    btn.addEventListener("click", () => openPlayerLogModal(Number(btn.dataset.logPid), state));
+  });
+}
+
 function renderPlayersTable(tbody, state) {
   const roomCounts = {};
   for (const pl of state.players) {
@@ -1187,13 +1276,14 @@ function renderEndedAdmin(state) {
     <div class="panel-body" style="display:flex;flex-direction:column;gap:24px;">
       <div class="card">
         <div style="font-weight:700;font-size:18px;margin-bottom:16px;text-align:center;">游戏结束 · 排行榜</div>
-        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { showRoles: state.rolesEnabled })}</div>
+        <div style="overflow-x:auto;">${rankingTableHtml(state.players, { showRoles: state.rolesEnabled, showLogButton: true })}</div>
       </div>
       <div style="display:flex;justify-content:flex-end;">
         <button class="btn" id="restart-btn">重新开始游戏</button>
       </div>
     </div>
   `;
+  wirePlayerLogButtons(panel, state);
   panel.querySelector("#restart-btn").addEventListener("click", () => {
     if (confirm("确定要重新开始游戏吗？所有数据将被清除。")) {
       socket.send({ type: "admin:restartGame", password: adminPassword });

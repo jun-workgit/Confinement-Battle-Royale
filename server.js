@@ -55,6 +55,14 @@ function defaultState() {
     // client like the rest of state, but only admin.html ever reads it —
     // the real public state.players is untouched until finishSettlement.
     settlementDraft: null,
+    // Per-player audit trail of every REAL (committed, applied-to-public)
+    // health/stat change: { [playerId]: LogEntry[] }, appended to only from
+    // admin:finishSettlement (one entry per section that actually affected
+    // that player) and admin:commitEdits (manual admin overrides) — never
+    // touched by uncommitted/undone settlement work, so it's a true record
+    // of what happened, not what was tried. Persists for the whole game
+    // (only admin:restartGame/createGame resets it). See addPlayerLog().
+    playerLogs: {},
     // Admin-controlled countdown shown on every view. `endsAt` is an absolute
     // ms-epoch timestamp so all clients (and a restarted server) agree on the
     // remaining time; `remainingSec` is only authoritative while not running.
@@ -436,6 +444,103 @@ function startSettlementDraft(state) {
   state.settlementDraft = { round: state.round, baseline: snapshot, working, sections };
 }
 
+// Appends one audit-trail entry for a player. Called only for REAL, applied
+// effects (from finishSettlement or a manual admin edit) — never for
+// in-progress/undone settlement work, so admin:settlementUndoSection and a
+// discarded 取消结算 simply never produce an entry here.
+function addPlayerLog(state, playerId, entry) {
+  const key = String(playerId);
+  (state.playerLogs[key] = state.playerLogs[key] || []).push(entry);
+}
+
+// Walks the 7 settlement sections in their fixed accordion order (1-7),
+// turning each committed section's applied effect into one log entry per
+// affected player. Order only matters for the running health-before/after
+// shown in the log (so it reads top-to-bottom like the accordion the admin
+// just worked through) — the actual final health is order-independent since
+// every section effect is a pure additive delta. Only called once
+// admin:finishSettlement has confirmed every section is committed.
+function buildSettlementLogEntries(state, draft) {
+  const runningHealth = {};
+  for (const wp of draft.baseline) runningHealth[wp.id] = wp.health;
+
+  for (const key of ["surgery", "combat", "poison", "hunger", "rocket", "items", "revival"]) {
+    const sec = draft.sections[key];
+    if (!sec.applied) continue;
+
+    if (key === "items") {
+      // One entry per active toggle (not per commitSectionEffect's combined
+      // delta) so e.g. adrenaline still shows up even though it currently
+      // contributes 0 to healthDeltas/statDeltas (it's a forward-looking
+      // flag, not an immediate effect).
+      for (const [idStr, t] of Object.entries(sec.data.toggles)) {
+        if (!t.pill && !t.wine && !t.adrenaline) continue;
+        const id = Number(idStr);
+        const hDelta = (sec.applied.healthDeltas && sec.applied.healthDeltas[id]) || 0;
+        const sDelta = sec.applied.statDeltas && sec.applied.statDeltas[id];
+        const before = runningHealth[id];
+        const after = before + hDelta;
+        runningHealth[id] = after;
+        addPlayerLog(state, id, {
+          round: draft.round,
+          source: "items",
+          detail: { pill: t.pill, wine: t.wine, wineResult: t.wineResult, adrenaline: t.adrenaline },
+          room: null,
+          healthBefore: before,
+          healthAfter: after,
+          healthDelta: hDelta,
+          statDeltas: sDelta || null,
+        });
+      }
+      continue;
+    }
+
+    const { healthDeltas, statDeltas, revivedIds } = sec.applied;
+    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {})]);
+    for (const idStr of ids) {
+      const id = Number(idStr);
+      const hDelta = (healthDeltas && healthDeltas[id]) || 0;
+      const sDelta = statDeltas && statDeltas[id];
+      if (!hDelta && !sDelta) continue; // no real effect on this player — nothing to log
+      const before = runningHealth[id];
+      const after = before + hDelta;
+      runningHealth[id] = after;
+
+      let detail = {};
+      let room = null;
+      if (key === "surgery") {
+        room = "B202";
+      } else if (key === "combat") {
+        const ev = sec.data.events.find((e) => e.playerIds.includes(id));
+        detail = { kind: ev ? ev.kind : null };
+        room = ev ? ev.room : null;
+      } else if (key === "poison") {
+        const wp = draft.working.find((p) => p.id === id);
+        room = wp ? wp.room : null;
+        detail = { floor: room ? roomFloor(room) : null };
+      } else if (key === "hunger") {
+        const t = sec.data.toggles[id];
+        detail = { missingWater: t ? !t.water : false, missingFood: t ? !t.food : false };
+      } else if (key === "rocket") {
+        room = sec.data.room;
+      } else if (key === "revival") {
+        detail = { absorbed: sec.data.absorbedThisRound[id], revived: revivedIds.includes(id) };
+      }
+
+      addPlayerLog(state, id, {
+        round: draft.round,
+        source: key,
+        detail,
+        room,
+        healthBefore: before,
+        healthAfter: after,
+        healthDelta: hDelta,
+        statDeltas: sDelta || null,
+      });
+    }
+  }
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -539,6 +644,7 @@ wss.on("connection", (ws) => {
           floorVotes: {},
           rocketTargetRoom: null,
           settlementDraft: null,
+          playerLogs: {},
           timer: state.timer,
         };
         break;
@@ -606,8 +712,34 @@ wss.on("connection", (ws) => {
           for (const pu of msg.players) {
             const player = state.players.find((p) => p.id === Number(pu.id));
             if (!player) continue;
-            player.stats = clampAdminStats(pu.stats);
-            player.health = clampHealth(pu.health);
+            const newStats = clampAdminStats(pu.stats);
+            const newHealth = clampHealth(pu.health);
+            // The draft the admin edits always holds every player, whether or
+            // not admin actually touched their row, so only a real diff (not
+            // "resubmitted the same values") is worth an audit-log entry —
+            // and only once the game is actually running (prep-phase edits
+            // are just initial setup, not a round event to validate later).
+            if (state.phase === "in_progress") {
+              const healthDelta = newHealth - player.health;
+              const statDeltas = {};
+              for (const k of ["power", "speed", "weight"]) {
+                if (newStats[k] !== player.stats[k]) statDeltas[k] = newStats[k] - player.stats[k];
+              }
+              if (healthDelta !== 0 || Object.keys(statDeltas).length) {
+                addPlayerLog(state, player.id, {
+                  round: state.round,
+                  source: "manual",
+                  detail: {},
+                  room: player.room,
+                  healthBefore: player.health,
+                  healthAfter: newHealth,
+                  healthDelta,
+                  statDeltas: Object.keys(statDeltas).length ? statDeltas : null,
+                });
+              }
+            }
+            player.stats = newStats;
+            player.health = newHealth;
           }
         }
         if (state.phase === "in_progress") {
@@ -730,6 +862,7 @@ wss.on("connection", (ws) => {
         const draft = state.settlementDraft;
         if (!draft || draft.round !== state.round) return;
         if (!Object.values(draft.sections).every((s) => s.committed)) return;
+        buildSettlementLogEntries(state, draft);
         for (const wp of draft.working) {
           const p = state.players.find((pp) => pp.id === wp.id);
           if (!p) continue;

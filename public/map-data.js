@@ -616,6 +616,11 @@ function rankingTableHtml(players, opts) {
           ? `<span class="ranking-role"><img src="${role.image}" alt="${en ? role.nameEn : role.name}">${en ? role.nameEn : role.name}</span>`
           : `<span class="ranking-role-none">${en ? "Unassigned" : "未分配"}</span>`}</td>`
       : "";
+    // Admin-only audit trail — opt-in via opts.showLogButton so player/public
+    // views (which never pass it) render the exact same table as before.
+    const logCell = opts.showLogButton
+      ? `<td><button class="btn secondary log-btn" data-log-pid="${p.id}" style="padding:4px 10px;font-size:12px;">日志</button></td>`
+      : "";
     return `
       <tr class="${isMe ? "me-row" : ""}">
         ${restricted ? "" : `<td class="leader-rank ${i === 0 && !dead ? "gold" : ""}">${i + 1}</td>`}
@@ -626,6 +631,7 @@ function rankingTableHtml(players, opts) {
         <td>${statText(p.stats.speed)}</td>
         <td>${statText(p.stats.weight)}</td>
         ${roleCell}
+        ${logCell}
       </tr>`;
   }).join("");
   const headers = [
@@ -638,6 +644,7 @@ function rankingTableHtml(players, opts) {
     { text: en ? "Capacity" : "负重" },
   ];
   if (showRoles) headers.push({ text: en ? "Role" : "职业" });
+  if (opts.showLogButton) headers.push({ text: "" }); // log-button column, header-less
   return `
     <table class="stats-table ranking-table">
       <thead><tr>${headers.map((h) => `<th class="${h.cellClass || ""}">${h.text}</th>`).join("")}</tr></thead>

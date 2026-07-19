@@ -592,6 +592,12 @@ table.stats-table td.sum-full { color: #d8b258; font-weight: 700; }
 
 .modal-card.room-info { width: 440px; max-height: 80vh; overflow-y: auto; }
 .modal-card.room-info .modal-title { color: #d8b258; font-size: 18px; }
+
+/* Per-player audit log modal (admin ranking tab). */
+.modal-card.player-log-modal { width: 640px; max-width: 92vw; }
+.player-log-round { margin-top: 16px; }
+.player-log-round:first-of-type { margin-top: 8px; }
+.player-log-round-title { font-weight: 700; font-size: 14px; color: #d8b258; margin-bottom: 6px; }
 .modal-body-text { white-space: pre-line; line-height: 1.7; font-size: 14px; color: #dfe1e4; }
 
 .poison-info-box {
