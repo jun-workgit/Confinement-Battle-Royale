@@ -20,6 +20,10 @@
 <script src="/auth.js"></script>
 <script>
 const panel = document.getElementById("panel");
+// Temporarily hidden — flip back to true to restore the import button.
+// The underlying feature (importPlayersFromSheet, /api/import-players) is
+// untouched, so re-enabling is just this one flag.
+const SHOW_IMPORT_FEATURE = false;
 const PW_KEY = "jbts_admin_pw";
 let adminPassword = sessionStorage.getItem(PW_KEY);
 let latestState = null;
@@ -31,6 +35,21 @@ let socket = null;
 let isEditing = false;
 let draft = null;
 let adminTab = "players";
+
+// Settlement (结算阶段) — purely local UI state; the actual draft lives
+// server-side (state.settlementDraft) so "取消结算" can exit this view
+// without losing any already-committed section (re-entering resumes it).
+let inSettlement = false;
+let expandedSettlementSection = "surgery";
+const SETTLEMENT_SECTIONS = [
+  { key: "surgery", title: "1. 手术室是否进行手术" },
+  { key: "combat", title: "2. 哪些房间发生战斗、乱斗或暗影与人相遇事件" },
+  { key: "poison", title: "3. 哪个楼层成为“毒气”楼层" },
+  { key: "hunger", title: "4. 水粮上交情况" },
+  { key: "rocket", title: "5. 火箭筒袭击了哪个房间" },
+  { key: "items", title: "6. 道具卡使用情况" },
+  { key: "revival", title: "7. 哪些暗影玩家复活" },
+];
 
 function startEdit(state) {
   isEditing = true;
@@ -185,6 +204,310 @@ function renderTimerTab(container, state) {
   container.querySelector("#timer-reset-btn").addEventListener("click", () => socket.send({ type: "admin:resetTimer", password: adminPassword }));
 }
 
+// Mirrors server.js's roomFloor() — only used client-side to label which
+// floor a player's current room belongs to (poison section preview).
+function roomFloorClient(roomId) {
+  if (!roomId) return null;
+  if (roomId[0] === "B") {
+    const m = roomId.match(/^B(\d)/);
+    return m ? "B" + m[1] : null;
+  }
+  if (roomId === "201" || roomId === "202") return "2";
+  return "1";
+}
+
+function settlementPlayerLabel(id) {
+  return `玩家 ${id}`;
+}
+
+// Shared commit/undo/reset footer for every accordion section — mirrors the
+// isEditing/draft pattern's commit/cancel buttons, but scoped to one section.
+function settlementFooterHtml(sec) {
+  return `
+    <div class="settlement-footer">
+      ${sec.committed
+        ? `<button class="btn secondary" data-settlement-action="undo">编辑（撤销本项提交）</button>`
+        : `<button class="btn" data-settlement-action="commit">提交</button>`}
+      <button class="btn secondary" data-settlement-action="reset">重置本项</button>
+    </div>`;
+}
+
+function wireSettlementFooter(container, key) {
+  const commitBtn = container.querySelector('[data-settlement-action="commit"]');
+  if (commitBtn) {
+    commitBtn.addEventListener("click", () => {
+      socket.send({ type: "admin:settlementCommitSection", section: key, password: adminPassword });
+    });
+  }
+  const undoBtn = container.querySelector('[data-settlement-action="undo"]');
+  if (undoBtn) {
+    undoBtn.addEventListener("click", () => {
+      socket.send({ type: "admin:settlementUndoSection", section: key, password: adminPassword });
+    });
+  }
+  const resetBtn = container.querySelector('[data-settlement-action="reset"]');
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      if (confirm("确定要重置本项吗？将撤销已提交的更改并恢复为自动检测结果。")) {
+        socket.send({ type: "admin:settlementResetSection", section: key, password: adminPassword });
+      }
+    });
+  }
+}
+
+function settlementHealthDelta(sec, playerId) {
+  return sec.committed && sec.applied ? (sec.applied.healthDeltas[playerId] || 0) : 0;
+}
+
+function renderSurgerySection(container, sec, draft) {
+  const outcomeLabel = { success: "手术成功（在场每人 +4 生命）", fail: "手术失败，触发乱斗", none: "本轮无手术" }[sec.data.outcome];
+  const involved = sec.data.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
+  container.innerHTML = `
+    <div style="margin-bottom:12px;font-size:14px;">检测结果：<b>${outcomeLabel}</b></div>
+    ${involved.length ? `
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+        <tbody>${involved.map((p) => {
+          const delta = settlementHealthDelta(sec, p.id);
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `❤️${delta > 0 ? "+" : ""}${delta}` : "-"}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>` : `<div style="color:#8b9482;font-size:13px;">B202 手术室内存活人数不足以触发手术。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  wireSettlementFooter(container, "surgery");
+}
+
+function renderCombatSection(container, sec, draft) {
+  const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
+  const kindIcon = { single: "⚔️", multi: "⚔️", shadow: "👻" };
+  container.innerHTML = `
+    ${sec.data.events.length ? sec.data.events.map((ev) => {
+      const players = ev.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
+      return `
+        <div class="settlement-event-group">
+          <div style="font-weight:700;margin-bottom:6px;">${getRoomLabel(ev.room)} — ${kindLabel[ev.kind]}</div>
+          <div style="overflow-x:auto;"><table class="stats-table">
+            <thead><tr><th>玩家</th><th>武力</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+            <tbody>${players.map((p) => {
+              const delta = settlementHealthDelta(sec, p.id);
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}</td><td>${p.stats.power}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `${kindIcon[ev.kind]}${delta}` : "-"}</td></tr>`;
+            }).join("")}</tbody>
+          </table></div>
+        </div>`;
+    }).join("") : `<div style="color:#8b9482;font-size:13px;">本轮没有房间发生战斗、乱斗或暗影相遇事件。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  wireSettlementFooter(container, "combat");
+}
+
+function renderPoisonSection(container, sec, draft) {
+  const floors = sec.data.floors;
+  const affected = draft.working.filter((p) => p.health > 0 && floors.includes(roomFloorClient(p.room)));
+  const tallyEntries = Object.entries(sec.data.tally);
+  container.innerHTML = `
+    <div style="margin-bottom:8px;font-size:14px;">投票结果：${tallyEntries.length ? tallyEntries.map(([f, c]) => `${f} 楼（${c} 票）`).join("，") : "本轮无人投票"}</div>
+    <div style="margin-bottom:12px;font-size:14px;">本轮"毒气"楼层：<b>${floors.length ? floors.join("、") + " 楼" : "无"}</b></div>
+    ${affected.length ? `
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>房间</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+        <tbody>${affected.map((p) => {
+          const delta = settlementHealthDelta(sec, p.id);
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `☠️${delta}` : "-"}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  wireSettlementFooter(container, "poison");
+}
+
+function renderHungerSection(container, sec, draft, state) {
+  const entries = Object.entries(sec.data.toggles);
+  container.innerHTML = `
+    ${state.round < 2 ? `<div style="color:#8b9482;font-size:13px;margin-bottom:12px;">第 2 回合起才需要上交水/粮，本轮不产生影响。</div>` : ""}
+    ${entries.length ? `
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>水</th><th>粮</th><th>B204 豁免</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+        <tbody>${entries.map(([pid, t]) => {
+          const p = draft.working.find((pp) => pp.id === Number(pid));
+          if (!p) return "";
+          const delta = settlementHealthDelta(sec, pid);
+          const locked = sec.committed || t.exempt;
+          return `<tr>
+            <td>${settlementPlayerLabel(pid)}</td>
+            <td><input type="checkbox" class="settlement-hunger-toggle" data-pid="${pid}" data-field="water" ${t.water ? "checked" : ""} ${locked ? "disabled" : ""}></td>
+            <td><input type="checkbox" class="settlement-hunger-toggle" data-pid="${pid}" data-field="food" ${t.food ? "checked" : ""} ${locked ? "disabled" : ""}></td>
+            <td>${t.exempt ? "是（餐厅）" : "-"}</td>
+            <td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `🍽️${delta}` : "-"}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  container.querySelectorAll(".settlement-hunger-toggle").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const pid = cb.dataset.pid;
+      const field = cb.dataset.field;
+      const newToggles = { ...sec.data.toggles, [pid]: { ...sec.data.toggles[pid], [field]: cb.checked } };
+      socket.send({ type: "admin:settlementSetSectionData", section: "hunger", data: { toggles: newToggles }, password: adminPassword });
+    });
+  });
+  wireSettlementFooter(container, "hunger");
+}
+
+function renderRocketSection(container, sec, draft) {
+  const room = sec.data.room;
+  const players = sec.data.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
+  container.innerHTML = `
+    <div style="margin-bottom:12px;font-size:14px;">本轮火箭筒目标：<b>${room ? getRoomLabel(room) : "未设置（请回到“地图”标签拖动 🚀 图标）"}</b></div>
+    ${players.length ? `
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+        <tbody>${players.map((p) => {
+          const delta = settlementHealthDelta(sec, p.id);
+          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${delta ? `🚀${delta}` : "-"}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>` : `<div style="color:#8b9482;font-size:13px;">目标房间内无玩家，或本轮未设置目标。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  wireSettlementFooter(container, "rocket");
+}
+
+const SETTLEMENT_WINE_RESULTS = [
+  { value: 1, label: "1：丢弃所有道具卡" },
+  { value: 2, label: "2：无事发生" },
+  { value: 3, label: "3：武力永久 +1" },
+  { value: 4, label: "4：速度永久 +1" },
+  { value: 5, label: "5：负重永久 +1" },
+  { value: 6, label: "6：生命 +2" },
+];
+
+function renderItemsSection(container, sec, draft) {
+  const entries = Object.entries(sec.data.toggles);
+  container.innerHTML = `
+    ${entries.length ? `
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>药片</th><th>酒</th><th>酒·结果</th><th>肾上腺素</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+        <tbody>${entries.map(([pid, t]) => {
+          const p = draft.working.find((pp) => pp.id === Number(pid));
+          if (!p) return "";
+          const delta = settlementHealthDelta(sec, pid);
+          const variance = [];
+          if (t.pill) variance.push("💊+2");
+          if (t.wine && t.wineResult === 6) variance.push("🍷+2");
+          if (t.wine && t.wineResult === 3) variance.push("🍷武力+1");
+          if (t.wine && t.wineResult === 4) variance.push("🍷速度+1");
+          if (t.wine && t.wineResult === 5) variance.push("🍷负重+1");
+          if (t.wine && t.wineResult === 1) variance.push("🍷丢弃道具");
+          if (t.adrenaline) variance.push("💉下轮保护");
+          return `<tr>
+            <td>${settlementPlayerLabel(pid)}</td>
+            <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="pill" ${t.pill ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
+            <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="wine" ${t.wine ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
+            <td>${t.wine
+              ? `<select class="settlement-wine-result" data-pid="${pid}" ${sec.committed ? "disabled" : ""}>
+                   <option value="">选择骰子结果</option>
+                   ${SETTLEMENT_WINE_RESULTS.map((w) => `<option value="${w.value}" ${t.wineResult === w.value ? "selected" : ""}>${w.label}</option>`).join("")}
+                 </select>`
+              : "-"}</td>
+            <td><input type="checkbox" class="settlement-item-toggle" data-pid="${pid}" data-field="adrenaline" ${t.adrenaline ? "checked" : ""} ${sec.committed ? "disabled" : ""}></td>
+            <td>${p.health - delta}</td><td>${p.health}</td><td>${variance.join(" ") || "-"}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  container.querySelectorAll(".settlement-item-toggle").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const pid = cb.dataset.pid;
+      const field = cb.dataset.field;
+      const newToggles = { ...sec.data.toggles, [pid]: { ...sec.data.toggles[pid], [field]: cb.checked } };
+      socket.send({ type: "admin:settlementSetSectionData", section: "items", data: { toggles: newToggles }, password: adminPassword });
+    });
+  });
+  container.querySelectorAll(".settlement-wine-result").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const pid = sel.dataset.pid;
+      const newToggles = { ...sec.data.toggles, [pid]: { ...sec.data.toggles[pid], wineResult: sel.value ? Number(sel.value) : null } };
+      socket.send({ type: "admin:settlementSetSectionData", section: "items", data: { toggles: newToggles }, password: adminPassword });
+    });
+  });
+  wireSettlementFooter(container, "items");
+}
+
+function renderRevivalSection(container, sec, draft) {
+  const entries = Object.entries(sec.data.absorbedThisRound);
+  container.innerHTML = `
+    ${entries.length ? `
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>本轮吸取</th><th>结算前</th><th>结算后</th><th>状态</th></tr></thead>
+        <tbody>${entries.map(([pid, absorbed]) => {
+          const p = draft.working.find((pp) => pp.id === Number(pid));
+          if (!p) return "";
+          const delta = settlementHealthDelta(sec, pid);
+          const revived = sec.committed && sec.applied && sec.applied.revivedIds.includes(Number(pid));
+          return `<tr><td>${settlementPlayerLabel(pid)}</td><td>+${absorbed}</td><td>${p.health - delta}</td><td>${p.health}</td><td>${revived ? "✅ 复活" : sec.committed ? "仍为暗影" : "-"}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>` : `<div style="color:#8b9482;font-size:13px;">本轮没有暗影玩家与存活玩家同处一室。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  wireSettlementFooter(container, "revival");
+}
+
+function renderSettlementSectionBody(container, key, draft, state) {
+  const sec = draft.sections[key];
+  if (key === "surgery") renderSurgerySection(container, sec, draft);
+  else if (key === "combat") renderCombatSection(container, sec, draft);
+  else if (key === "poison") renderPoisonSection(container, sec, draft);
+  else if (key === "hunger") renderHungerSection(container, sec, draft, state);
+  else if (key === "rocket") renderRocketSection(container, sec, draft);
+  else if (key === "items") renderItemsSection(container, sec, draft);
+  else if (key === "revival") renderRevivalSection(container, sec, draft);
+}
+
+function renderSettlementTab(tabBody, state) {
+  const draft = state.settlementDraft;
+  if (!draft || draft.round !== state.round) {
+    tabBody.innerHTML = `
+      <div class="card" style="text-align:center;color:#8b9482;">
+        点击上方"结算"按钮开始本轮结算。
+      </div>`;
+    return;
+  }
+  tabBody.innerHTML = `
+    <div class="card">
+      <div style="font-weight:700;font-size:16px;margin-bottom:4px;">结算阶段 · 第 ${draft.round} 回合</div>
+      <div style="font-size:13px;color:#8b9482;margin-bottom:16px;">逐项提交后仅管理员可见，全部 7 项提交后点击上方"结算完成"才会一次性生效给所有玩家。</div>
+      <div class="settlement-accordion">
+        ${SETTLEMENT_SECTIONS.map((s) => {
+          const sec = draft.sections[s.key];
+          const expanded = expandedSettlementSection === s.key;
+          return `
+            <div class="settlement-section ${expanded ? "expanded" : ""}">
+              <div class="settlement-section-header" data-section="${s.key}">
+                <span>${s.title}</span>
+                <span class="pill-tag ${sec.committed ? "green" : "amber"}">${sec.committed ? "已提交" : "待处理"}</span>
+              </div>
+              <div class="settlement-section-body" id="settlement-body-${s.key}" style="${expanded ? "" : "display:none;"}"></div>
+            </div>`;
+        }).join("")}
+      </div>
+    </div>`;
+
+  tabBody.querySelectorAll(".settlement-section-header").forEach((header) => {
+    header.addEventListener("click", () => {
+      const key = header.dataset.section;
+      expandedSettlementSection = expandedSettlementSection === key ? null : key;
+      render();
+    });
+  });
+
+  for (const s of SETTLEMENT_SECTIONS) {
+    if (expandedSettlementSection !== s.key) continue;
+    const bodyEl = tabBody.querySelector(`#settlement-body-${s.key}`);
+    renderSettlementSectionBody(bodyEl, s.key, draft, state);
+  }
+}
+
 function render() {
   const state = latestState;
   if (!state) return;
@@ -333,15 +656,20 @@ function renderDashboard(state) {
           <div class="tab ${adminTab === "players" ? "active" : ""}" id="admin-tab-players">玩家属性</div>
           <div class="tab ${adminTab === "map" ? "active" : ""}" id="admin-tab-map">地图</div>
           <div class="tab ${adminTab === "poison" ? "active" : ""}" id="admin-tab-poison">毒气伤害</div>
+          ${isProgress ? `<div class="tab ${adminTab === "settlement" ? "active" : ""}" id="admin-tab-settlement">结算阶段</div>` : ""}
           <div class="tab ${adminTab === "ranking" ? "active" : ""}" id="admin-tab-ranking">排行榜</div>
           <div class="tab ${adminTab === "rules" ? "active" : ""}" id="admin-tab-rules">游戏规则</div>
           <div class="tab ${adminTab === "timer" ? "active" : ""}" id="admin-tab-timer">计时器</div>
         </div>
-        ${isEditing
-          ? `<button class="btn secondary" id="import-btn" style="padding:6px 14px;font-size:12px;">导入体测数据</button>
+        ${inSettlement
+          ? `<button class="btn" id="settlement-finish-btn" style="padding:6px 14px;font-size:12px;">结算完成</button>
+             <button class="btn secondary" id="settlement-cancel-btn" style="padding:6px 14px;font-size:12px;">取消结算</button>`
+          : isEditing
+          ? `${SHOW_IMPORT_FEATURE ? '<button class="btn secondary" id="import-btn" style="padding:6px 14px;font-size:12px;">导入体测数据</button>' : ""}
              <button class="btn" id="commit-btn" style="padding:6px 14px;font-size:12px;">确认</button>
              <button class="btn secondary" id="cancel-btn" style="padding:6px 14px;font-size:12px;">取消</button>`
-          : `<button class="btn secondary" id="edit-btn" style="padding:6px 14px;font-size:12px;">编辑</button>`
+          : `<button class="btn secondary" id="edit-btn" style="padding:6px 14px;font-size:12px;">编辑</button>
+             ${isProgress ? `<button class="btn secondary" id="settlement-start-btn" style="padding:6px 14px;font-size:12px;">结算</button>` : ""}`
         }
       </div>
     </div>
@@ -351,16 +679,53 @@ function renderDashboard(state) {
     <div class="panel-body" id="tab-body"></div>
     <div style="display:flex;justify-content:flex-end;gap:12px;padding:0 22px 22px;">
       ${isPrep ? `<button class="btn" id="start-btn" ${isEditing ? "disabled" : ""}>开始游戏</button>` : ""}
-      ${isProgress ? `<button class="btn secondary" id="end-btn" ${isEditing ? "disabled" : ""}>结束游戏</button>` : ""}
+      ${isProgress ? `<button class="btn secondary" id="end-btn" ${isEditing || inSettlement ? "disabled" : ""}>结束游戏</button>` : ""}
     </div>
   `;
 
   panel.querySelector("#admin-tab-players").addEventListener("click", () => { adminTab = "players"; render(); });
   panel.querySelector("#admin-tab-map").addEventListener("click", () => { adminTab = "map"; render(); });
   panel.querySelector("#admin-tab-poison").addEventListener("click", () => { adminTab = "poison"; render(); });
+  const settlementTabBtn = panel.querySelector("#admin-tab-settlement");
+  if (settlementTabBtn) settlementTabBtn.addEventListener("click", () => { adminTab = "settlement"; render(); });
   panel.querySelector("#admin-tab-ranking").addEventListener("click", () => { adminTab = "ranking"; render(); });
   panel.querySelector("#admin-tab-rules").addEventListener("click", () => { adminTab = "rules"; render(); });
   panel.querySelector("#admin-tab-timer").addEventListener("click", () => { adminTab = "timer"; render(); });
+
+  const settlementStartBtn = panel.querySelector("#settlement-start-btn");
+  if (settlementStartBtn) {
+    settlementStartBtn.addEventListener("click", () => {
+      inSettlement = true;
+      adminTab = "settlement";
+      expandedSettlementSection = "surgery";
+      socket.send({ type: "admin:startSettlement", password: adminPassword });
+      render();
+    });
+  }
+  const settlementCancelBtn = panel.querySelector("#settlement-cancel-btn");
+  if (settlementCancelBtn) {
+    settlementCancelBtn.addEventListener("click", () => {
+      // Client-side only — the server draft (and anything already
+      // committed within it) is untouched, so re-clicking "结算" resumes.
+      inSettlement = false;
+      render();
+    });
+  }
+  const settlementFinishBtn = panel.querySelector("#settlement-finish-btn");
+  if (settlementFinishBtn) {
+    settlementFinishBtn.addEventListener("click", () => {
+      const draftState = state.settlementDraft;
+      const allDone = draftState && Object.values(draftState.sections).every((s) => s.committed);
+      if (!allDone) {
+        alert("请先完成并提交全部 7 个结算项目，才能结束本轮结算。");
+        return;
+      }
+      socket.send({ type: "admin:finishSettlement", password: adminPassword });
+      inSettlement = false;
+      adminTab = "players";
+      render();
+    });
+  }
 
   if (isEditing && isProgress) {
     panel.querySelector("#round-input").addEventListener("input", (e) => {
@@ -408,8 +773,15 @@ function renderDashboard(state) {
         <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
           ${isEditing ? "点击左侧楼层标签以激活/解除该层中毒（需点击“确认”生效）" : "点击上方“编辑”以修改中毒楼层"}
           · 拖动玩家图标到房间中标记位置（立即生效，拖回下方框内可移除）
+          · 拖动玩家图标到左侧楼层标签记录本轮投毒意向（仅作标记，不影响其房间位置）
         </div>
         ${hackerMark ? `<div style="font-size:13px;color:#ff8a80;margin-bottom:12px;">黑客本轮秘密关闭：<b>${getRoomLabel(hackerMark.room)}</b>（仅黑客本人与管理员可见）</div>` : ""}
+        <div class="rocket-tray">
+          <div class="rocket-icon" id="rocket-drag-icon" title="拖动到房间标记本轮火箭筒袭击目标">🚀</div>
+          ${state.rocketTargetRoom
+            ? `<span>本轮火箭筒目标：<b>${getRoomLabel(state.rocketTargetRoom)}</b></span><button class="btn secondary" id="rocket-cancel-btn" style="padding:4px 10px;font-size:12px;">取消</button>`
+            : `<span style="color:#8b9482;font-size:13px;">拖动火箭图标到房间以标记本轮火箭筒目标</span>`}
+        </div>
         <div id="meeple-tray" class="meeple-tray"></div>
         <div id="poison-map"></div>
       </div>`;
@@ -430,9 +802,21 @@ function renderDashboard(state) {
       const markedEl = poisonMapEl.querySelector(`.room[data-room-id="${hackerMark.room}"]`);
       if (markedEl) markedEl.classList.add("room-hacker-marked");
     }
+    if (state.rocketTargetRoom) {
+      const rocketEl = poisonMapEl.querySelector(`.room[data-room-id="${state.rocketTargetRoom}"]`);
+      if (rocketEl) rocketEl.classList.add("room-rocket-target");
+    }
+    renderFloorVoteBadges(poisonMapEl, state);
     renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
     renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);
     tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => attachMeepleDrag(el, state));
+    attachRocketDrag(tabBody.querySelector("#rocket-drag-icon"));
+    const rocketCancelBtn = tabBody.querySelector("#rocket-cancel-btn");
+    if (rocketCancelBtn) {
+      rocketCancelBtn.addEventListener("click", () => {
+        socket.send({ type: "admin:setRocketTarget", room: null, password: adminPassword });
+      });
+    }
   } else if (adminTab === "poison") {
     const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
     tabBody.innerHTML = `
@@ -453,10 +837,13 @@ function renderDashboard(state) {
     renderGameRules(tabBody, state);
   } else if (adminTab === "timer") {
     renderTimerTab(tabBody, state);
+  } else if (adminTab === "settlement") {
+    renderSettlementTab(tabBody, state);
   }
 
   if (isEditing) {
-    panel.querySelector("#import-btn").addEventListener("click", () => importPlayersFromSheet(state));
+    const importBtn = panel.querySelector("#import-btn");
+    if (importBtn) importBtn.addEventListener("click", () => importPlayersFromSheet(state));
     panel.querySelector("#commit-btn").addEventListener("click", () => commitEdit(state));
     panel.querySelector("#cancel-btn").addEventListener("click", () => cancelEdit());
   } else {
@@ -512,6 +899,10 @@ function attachMeepleDrag(el, state) {
       if (room && !TRANSIT_ROOM_IDS.includes(room.dataset.roomId)) {
         return { kind: "room", el: room, room: room.dataset.roomId };
       }
+      // Dropping on a floor label records a poison-vote indicator only —
+      // it never touches this player's actual room position.
+      const floorChip = under.closest(".floor-chip");
+      if (floorChip) return { kind: "floor", el: floorChip, floor: floorChip.dataset.floor };
       const tray = under.closest("#meeple-tray");
       if (tray) return { kind: "tray", el: tray };
       return null;
@@ -537,8 +928,80 @@ function attachMeepleDrag(el, state) {
       const target = findDropTarget(ev.clientX, ev.clientY);
       if (target && target.kind === "room") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: target.room, password: adminPassword });
+      } else if (target && target.kind === "floor") {
+        socket.send({ type: "admin:setFloorVote", playerId, floor: target.floor, password: adminPassword });
       } else if (target && target.kind === "tray") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: null, password: adminPassword });
+      }
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+}
+
+// Small colored dots on each floor-column label showing which players'
+// tokens were dragged there this round — purely a voting indicator.
+function renderFloorVoteBadges(mapEl, state) {
+  mapEl.querySelectorAll(".floor-vote-badges").forEach((el) => el.remove());
+  const votesByFloor = {};
+  for (const [playerId, floor] of Object.entries(state.floorVotes || {})) {
+    (votesByFloor[floor] = votesByFloor[floor] || []).push(Number(playerId));
+  }
+  for (const [floor, playerIds] of Object.entries(votesByFloor)) {
+    const chip = mapEl.querySelector(`.floor-chip[data-floor="${floor}"]`);
+    if (!chip) continue;
+    const badges = document.createElement("div");
+    badges.className = "floor-vote-badges";
+    badges.innerHTML = playerIds.map((pid) => `<span class="floor-vote-dot" style="background:${meepleColor(pid)};">${pid}</span>`).join("");
+    chip.appendChild(badges);
+  }
+}
+
+// Same Pointer Events drag pattern as attachMeepleDrag, but for the single
+// Rocket Launcher icon — only rooms are valid drop targets (no tray/floor).
+function attachRocketDrag(el) {
+  if (!el) return;
+  el.classList.add("draggable");
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    e.preventDefault();
+
+    const ghost = document.createElement("div");
+    ghost.className = "rocket-drag-ghost";
+    ghost.textContent = "🚀";
+    ghost.style.left = e.clientX + "px";
+    ghost.style.top = e.clientY + "px";
+    document.body.appendChild(ghost);
+    el.classList.add("dragging");
+
+    let lastHover = null;
+    function findRoomTarget(x, y) {
+      const under = document.elementFromPoint(x, y);
+      if (!under) return null;
+      const room = under.closest(".room");
+      if (room && !TRANSIT_ROOM_IDS.includes(room.dataset.roomId)) return room;
+      return null;
+    }
+    function onMove(ev) {
+      ghost.style.left = ev.clientX + "px";
+      ghost.style.top = ev.clientY + "px";
+      const hoverEl = findRoomTarget(ev.clientX, ev.clientY);
+      if (hoverEl !== lastHover) {
+        if (lastHover) lastHover.classList.remove("drop-hover");
+        if (hoverEl) hoverEl.classList.add("drop-hover");
+        lastHover = hoverEl;
+      }
+    }
+    function onUp(ev) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.removeChild(ghost);
+      el.classList.remove("dragging");
+      if (lastHover) lastHover.classList.remove("drop-hover");
+
+      const room = findRoomTarget(ev.clientX, ev.clientY);
+      if (room) {
+        socket.send({ type: "admin:setRocketTarget", room: room.dataset.roomId, password: adminPassword });
       }
     }
     window.addEventListener("pointermove", onMove);

@@ -14,6 +14,9 @@ const SPAWN_ROOM_ID_SET = new Set(SPAWN_ROOM_IDS);
 const STAT_IDS = STAT_DEFS.map((s) => s.id);
 const PORT = process.env.PORT || 8000;
 const ADMIN_PASSWORD = "0000";
+// The game never runs past round 6 — settlement's finish action ends the
+// game instead of advancing past this.
+const MAX_ROUND = 6;
 // Google Apps Script web app (bound to the stats-tracking spreadsheet's
 // "API" sheet tab) that the admin import button pulls player data from.
 const SHEET_API_URL = "https://script.google.com/macros/s/AKfycbwLvdoyuvtGCudYriJxVVqOzkeVgYvwjfvS57_Q53OLGeRT_C_R-6vxi4JNkTnpFftv/exec";
@@ -40,6 +43,18 @@ function defaultState() {
     // Visible only to the Hacker player themselves and to admin (never to
     // other players or the public view) — see index.html/admin.html.
     hackerRoomMark: null,
+    // Admin-tracked inputs for the current round, both purely informational
+    // (never touch player.room) and reset whenever the round changes (see
+    // admin:commitEdits): { [playerId]: floorId } poison-vote indicator, and
+    // this round's Rocket Launcher blast target (or null).
+    floorVotes: {},
+    rocketTargetRoom: null,
+    // Settlement-phase draft — null outside of settlement. See
+    // startSettlementDraft() for the shape. `working` holds player
+    // health/stats as sections get committed; this is broadcast to every
+    // client like the rest of state, but only admin.html ever reads it —
+    // the real public state.players is untouched until finishSettlement.
+    settlementDraft: null,
     // Admin-controlled countdown shown on every view. `endsAt` is an absolute
     // ms-epoch timestamp so all clients (and a restarted server) agree on the
     // remaining time; `remainingSec` is only authoritative while not running.
@@ -167,6 +182,260 @@ function clampHealth(v) {
   return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
+// ---------------------------------------------------------------------
+// Settlement (结算阶段) — reconciles one round's health/stat changes across
+// 7 sections before revealing anything publicly. `settlementDraft.working`
+// holds the in-progress numbers; the real state.players is untouched until
+// admin:finishSettlement copies working over. Every section commit mutates
+// `working` and records exactly what it changed so admin:settlementUndoSection
+// can reverse it precisely, regardless of what other sections have done
+// since. Room-id -> floor-id: "2xx"/"Bxdd" style ids encode their floor in
+// the leading digit(s).
+function roomFloor(roomId) {
+  if (!roomId) return null;
+  if (roomId[0] === "B") {
+    const m = roomId.match(/^B(\d)/);
+    return m ? "B" + m[1] : null;
+  }
+  if (roomId === "201" || roomId === "202") return "2";
+  return "1"; // 101, 102, 103, 104
+}
+
+function draftPlayerSnapshot(players) {
+  return players.map((p) => ({
+    id: p.id,
+    health: p.health,
+    stats: { ...p.stats },
+    room: p.room,
+    roleId: p.roleId,
+  }));
+}
+
+// Rooms with 2 living players (single fight), 3+ (brawl), or a shadow
+// sharing a room with any living player (shadow-meet) — a room can produce
+// both a fight event AND a shadow-meet event at once. B202 (手术室) is a
+// special case: exactly 2 living players there means surgery instead of a
+// fight (handled by the "surgery" section), so it's excluded here — but 3+
+// still triggers a brawl same as any other room, per B202's own rules.
+function computeRoomEvents(working) {
+  const byRoom = {};
+  for (const p of working) {
+    if (!p.room) continue;
+    (byRoom[p.room] = byRoom[p.room] || []).push(p);
+  }
+  const events = [];
+  for (const room of Object.keys(byRoom)) {
+    const group = byRoom[room];
+    const living = group.filter((p) => p.health > 0);
+    const shadows = group.filter((p) => p.health <= 0);
+    if (shadows.length && living.length) {
+      events.push({ room, kind: "shadow", playerIds: group.map((p) => p.id) });
+    }
+    if (living.length === 2 && room !== "B202") {
+      events.push({ room, kind: "single", playerIds: living.map((p) => p.id) });
+    } else if (living.length > 2) {
+      events.push({ room, kind: "multi", playerIds: living.map((p) => p.id) });
+    }
+  }
+  return events;
+}
+
+function poisonDamageForRound(table, round) {
+  const row = (table && table.length ? table : DEFAULT_POISON_DAMAGE_TABLE).find((r) => r.round === round);
+  return row ? row.damage : 0;
+}
+
+// Auto-computed default data for each section, derived from `working` (the
+// draft's current health/stats) plus whatever admin has tracked this round
+// (floor votes, rocket target). Admin can override individual fields
+// afterward via admin:settlementSetSectionData before committing.
+function computeSectionDefault(section, working, state) {
+  switch (section) {
+    case "surgery": {
+      const occupants = working.filter((p) => p.room === "B202" && p.health > 0);
+      const outcome = occupants.length === 2 ? "success" : occupants.length >= 3 ? "fail" : "none";
+      return { outcome, playerIds: occupants.map((p) => p.id) };
+    }
+    case "combat": {
+      return { events: computeRoomEvents(working) };
+    }
+    case "poison": {
+      const tally = {};
+      for (const [playerId, floor] of Object.entries(state.floorVotes || {})) {
+        const voter = working.find((p) => p.id === Number(playerId));
+        if (!voter || voter.health <= 0) continue; // shadows don't vote
+        tally[floor] = (tally[floor] || 0) + 1;
+      }
+      const counts = Object.values(tally);
+      const max = counts.length ? Math.max(...counts) : 0;
+      const floors = max > 0 ? Object.keys(tally).filter((f) => tally[f] === max) : [];
+      return { floors, tally };
+    }
+    case "hunger": {
+      const toggles = {};
+      for (const p of working) {
+        if (p.health <= 0) continue; // shadows don't hand in water/food
+        const exempt = p.room === "B204";
+        toggles[p.id] = { water: true, food: true, exempt };
+      }
+      return { toggles };
+    }
+    case "rocket": {
+      const room = state.rocketTargetRoom || null;
+      const playerIds = room ? working.filter((p) => p.room === room).map((p) => p.id) : [];
+      return { room, playerIds };
+    }
+    case "items": {
+      const toggles = {};
+      for (const p of working) {
+        if (p.health <= 0) continue;
+        toggles[p.id] = { pill: false, wine: false, wineResult: null, adrenaline: false };
+      }
+      return { toggles };
+    }
+    case "revival": {
+      const events = computeRoomEvents(working).filter((e) => e.kind === "shadow");
+      const preview = {};
+      for (const e of events) {
+        const livingCount = working.filter((p) => e.playerIds.includes(p.id) && p.health > 0).length;
+        for (const p of working) {
+          if (!e.playerIds.includes(p.id) || p.health > 0) continue;
+          preview[p.id] = (preview[p.id] || 0) + livingCount;
+        }
+      }
+      return { absorbedThisRound: preview };
+    }
+    default:
+      return {};
+  }
+}
+
+// Applies a section's committed effect to `working` (mutating health/stats
+// in place) and returns everything needed to undo it later: per-player
+// health/stat deltas, plus any "extra" state this section touched outside
+// player data (only poison touches state.poisonFloors).
+function commitSectionEffect(section, data, working, state) {
+  const healthDeltas = {};
+  const statDeltas = {};
+  const bump = (id, dh) => { healthDeltas[id] = (healthDeltas[id] || 0) + dh; };
+  const find = (id) => working.find((p) => p.id === id);
+
+  if (section === "surgery") {
+    if (data.outcome === "success") {
+      for (const id of data.playerIds) bump(id, 4);
+    }
+  } else if (section === "combat") {
+    for (const ev of data.events) {
+      if (ev.kind === "single" || ev.kind === "multi") {
+        const players = ev.playerIds.map(find).filter(Boolean);
+        const maxPower = Math.max(...players.map((p) => p.stats.power));
+        for (const p of players) {
+          const dmg = maxPower - p.stats.power;
+          if (dmg > 0) bump(p.id, -dmg);
+        }
+      } else if (ev.kind === "shadow") {
+        const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
+        for (const p of ev.playerIds.map(find).filter((p) => p && p.health > 0)) {
+          bump(p.id, -shadowCount);
+        }
+      }
+    }
+  } else if (section === "poison") {
+    const damage = poisonDamageForRound(state.poisonDamageTable, state.round);
+    for (const p of working) {
+      if (p.health > 0 && data.floors.includes(roomFloor(p.room))) bump(p.id, -damage);
+    }
+  } else if (section === "hunger") {
+    if (state.round >= 2) {
+      for (const [playerId, t] of Object.entries(data.toggles)) {
+        if (t.exempt) continue;
+        const missing = (t.water ? 0 : 1) + (t.food ? 0 : 1);
+        if (missing > 0) bump(Number(playerId), -missing);
+      }
+    }
+  } else if (section === "rocket") {
+    if (data.room) {
+      for (const id of data.playerIds) bump(id, -4);
+    }
+  } else if (section === "items") {
+    for (const [playerId, t] of Object.entries(data.toggles)) {
+      const id = Number(playerId);
+      if (t.pill) bump(id, 2);
+      if (t.wine) {
+        if (t.wineResult === 3) statDeltas[id] = { ...statDeltas[id], power: 1 };
+        else if (t.wineResult === 4) statDeltas[id] = { ...statDeltas[id], speed: 1 };
+        else if (t.wineResult === 5) statDeltas[id] = { ...statDeltas[id], weight: 1 };
+        else if (t.wineResult === 6) bump(id, 2);
+      }
+      // Adrenaline's protection (next-round speed 10 + health floor 1) is a
+      // forward-looking flag, applied when settling THAT future round —
+      // not a delta here.
+    }
+  } else if (section === "revival") {
+    for (const [playerId, absorbed] of Object.entries(data.absorbedThisRound)) {
+      bump(Number(playerId), absorbed);
+    }
+  }
+
+  for (const [id, dh] of Object.entries(healthDeltas)) {
+    const p = find(Number(id));
+    if (p) p.health += dh;
+  }
+  for (const [id, ds] of Object.entries(statDeltas)) {
+    const p = find(Number(id));
+    if (p) for (const k of Object.keys(ds)) p.stats[k] = (p.stats[k] || 0) + ds[k];
+  }
+
+  // Revival is the one section where crossing the health>=0 threshold is a
+  // state transition, not just a number: whoever's working health reaches
+  // >=0 this round revives with health equal to whatever they actually
+  // absorbed (at least 1, since 0 still reads as a shadow everywhere else).
+  const revivedIds = [];
+  if (section === "revival") {
+    for (const [playerId] of Object.entries(data.absorbedThisRound)) {
+      const p = find(Number(playerId));
+      if (p && p.health >= 0) {
+        p.health = Math.max(1, p.health);
+        revivedIds.push(p.id);
+      }
+    }
+  }
+
+  const extra = {};
+  if (section === "poison") {
+    extra.previousPoisonFloors = [...state.poisonFloors];
+    state.poisonFloors = [...new Set([...state.poisonFloors, ...data.floors])];
+  }
+
+  return { healthDeltas, statDeltas, revivedIds, extra };
+}
+
+function undoSectionEffect(section, applied, working, state) {
+  const find = (id) => working.find((p) => p.id === id);
+  for (const [id, dh] of Object.entries(applied.healthDeltas || {})) {
+    const p = find(Number(id));
+    if (p) p.health -= dh;
+  }
+  for (const [id, ds] of Object.entries(applied.statDeltas || {})) {
+    const p = find(Number(id));
+    if (p) for (const k of Object.keys(ds)) p.stats[k] = (p.stats[k] || 0) - ds[k];
+  }
+  if (section === "poison" && applied.extra && applied.extra.previousPoisonFloors) {
+    state.poisonFloors = applied.extra.previousPoisonFloors;
+  }
+}
+
+function startSettlementDraft(state) {
+  if (state.settlementDraft && state.settlementDraft.round === state.round) return; // already in progress — resume as-is
+  const snapshot = draftPlayerSnapshot(state.players);
+  const working = draftPlayerSnapshot(state.players);
+  const sections = {};
+  for (const name of ["surgery", "combat", "poison", "hunger", "rocket", "items", "revival"]) {
+    sections[name] = { committed: false, data: computeSectionDefault(name, working, state), applied: null };
+  }
+  state.settlementDraft = { round: state.round, baseline: snapshot, working, sections };
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -267,6 +536,9 @@ wss.on("connection", (ws) => {
           selectedRoles: state.selectedRoles,
           rolesVisibleToPlayers: state.rolesVisibleToPlayers,
           hackerRoomMark: null,
+          floorVotes: {},
+          rocketTargetRoom: null,
+          settlementDraft: null,
           timer: state.timer,
         };
         break;
@@ -339,7 +611,16 @@ wss.on("connection", (ws) => {
           }
         }
         if (state.phase === "in_progress") {
-          if (msg.round !== undefined) state.round = clampNonNegativeInt(msg.round);
+          if (msg.round !== undefined) {
+            const newRound = clampNonNegativeInt(msg.round);
+            // Floor votes and the rocket target are inputs for THIS round's
+            // settlement — stale once the round actually changes.
+            if (newRound !== state.round) {
+              state.floorVotes = {};
+              state.rocketTargetRoom = null;
+            }
+            state.round = newRound;
+          }
           if (Array.isArray(msg.poisonFloors)) {
             state.poisonFloors = msg.poisonFloors.filter((f) => FLOOR_IDS.has(f));
           }
@@ -358,6 +639,110 @@ wss.on("connection", (ws) => {
         } else {
           if (!ROOM_IDS.has(msg.room)) return;
           player.room = msg.room;
+        }
+        break;
+      }
+      // Admin drags a player token onto a floor-column label to record their
+      // poison-vote indicator — purely informational, distinct from
+      // player.room and never moves it. Auto-cleared when the round changes.
+      case "admin:setFloorVote": {
+        if (state.phase !== "in_progress") return;
+        const playerId = Math.round(Number(msg.playerId));
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player) return;
+        if (msg.floor === null) {
+          delete state.floorVotes[playerId];
+        } else {
+          if (!FLOOR_IDS.has(msg.floor)) return;
+          state.floorVotes[playerId] = msg.floor;
+        }
+        break;
+      }
+      // Admin drags the Rocket Launcher icon onto a room to mark this
+      // round's blast target; cancelable, auto-cleared on round change.
+      case "admin:setRocketTarget": {
+        if (state.phase !== "in_progress") return;
+        if (msg.room === null) {
+          state.rocketTargetRoom = null;
+        } else {
+          if (!ROOM_IDS.has(msg.room)) return;
+          state.rocketTargetRoom = msg.room;
+        }
+        break;
+      }
+      // Idempotent: creates a fresh draft only if none exists for this round
+      // yet, otherwise leaves whatever's already in progress untouched — so
+      // re-entering settlement after "取消结算" (a client-side-only exit,
+      // no server message) resumes exactly where admin left off.
+      case "admin:startSettlement": {
+        if (state.phase !== "in_progress") return;
+        startSettlementDraft(state);
+        break;
+      }
+      // Admin edits a section's inputs (toggles, wine result, etc.) before
+      // committing — merges into the existing computed data.
+      case "admin:settlementSetSectionData": {
+        const draft = state.settlementDraft;
+        if (!draft || draft.round !== state.round) return;
+        const sec = draft.sections[msg.section];
+        if (!sec || sec.committed) return;
+        sec.data = { ...sec.data, ...msg.data };
+        break;
+      }
+      case "admin:settlementCommitSection": {
+        const draft = state.settlementDraft;
+        if (!draft || draft.round !== state.round) return;
+        const sec = draft.sections[msg.section];
+        if (!sec || sec.committed) return;
+        sec.applied = commitSectionEffect(msg.section, sec.data, draft.working, state);
+        sec.committed = true;
+        break;
+      }
+      case "admin:settlementUndoSection": {
+        const draft = state.settlementDraft;
+        if (!draft || draft.round !== state.round) return;
+        const sec = draft.sections[msg.section];
+        if (!sec || !sec.committed) return;
+        undoSectionEffect(msg.section, sec.applied, draft.working, state);
+        sec.applied = null;
+        sec.committed = false;
+        break;
+      }
+      // Resets this section back to its freshly-auto-computed state — undoes
+      // the commit first if needed, then discards any manual overrides.
+      case "admin:settlementResetSection": {
+        const draft = state.settlementDraft;
+        if (!draft || draft.round !== state.round) return;
+        const sec = draft.sections[msg.section];
+        if (!sec) return;
+        if (sec.committed) {
+          undoSectionEffect(msg.section, sec.applied, draft.working, state);
+          sec.applied = null;
+          sec.committed = false;
+        }
+        sec.data = computeSectionDefault(msg.section, draft.working, state);
+        break;
+      }
+      // Pushes the draft's working health/stats to the real (public)
+      // players, advances the round or ends the game past MAX_ROUND, and
+      // clears this round's trackers. Requires every section committed.
+      case "admin:finishSettlement": {
+        const draft = state.settlementDraft;
+        if (!draft || draft.round !== state.round) return;
+        if (!Object.values(draft.sections).every((s) => s.committed)) return;
+        for (const wp of draft.working) {
+          const p = state.players.find((pp) => pp.id === wp.id);
+          if (!p) continue;
+          p.health = wp.health;
+          p.stats = { ...wp.stats };
+        }
+        state.settlementDraft = null;
+        state.floorVotes = {};
+        state.rocketTargetRoom = null;
+        if (state.round >= MAX_ROUND) {
+          state.phase = "ended";
+        } else {
+          state.round += 1;
         }
         break;
       }

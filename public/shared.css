@@ -181,6 +181,64 @@ html, body {
 .meeple-tray-empty { font-size: 12px; color: #8b9482; }
 .meeple-tray .meeple { position: static; margin: 0; }
 
+/* Floor-vote indicator dots — appended inline into a .floor-chip's own flex
+   row, one per player token dragged there this round (admin map only). */
+.floor-vote-badges { display: flex; gap: 2px; margin-left: 4px; }
+.floor-vote-dot {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 800; color: #fff; border: 1px solid rgba(255,255,255,0.6);
+}
+
+/* Rocket Launcher target picker (admin map, in-progress only). */
+.rocket-tray {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+  padding: 10px 14px; border-radius: 8px;
+  background: rgba(0,0,0,0.2); border: 1px solid rgba(214,218,224,0.25);
+  font-size: 14px; color: #c9ccd1;
+}
+.rocket-tray b { color: #ff8a80; }
+.rocket-icon {
+  font-size: 26px; line-height: 1; cursor: grab; user-select: none; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+  background: rgba(214,40,57,0.15); border: 1px solid rgba(214,40,57,0.4);
+}
+.rocket-icon.dragging { opacity: 0.35; }
+.rocket-drag-ghost {
+  position: fixed; font-size: 26px; margin: -20px 0 0 -20px;
+  pointer-events: none; z-index: 3000; cursor: grabbing;
+  filter: drop-shadow(0 4px 10px rgba(0,0,0,0.6));
+}
+.room.room-rocket-target {
+  border: 2px solid #d62839;
+  background: repeating-linear-gradient(115deg, rgba(214,40,57,0.45) 0px, rgba(214,40,57,0.45) 10px, rgba(255,138,128,0.25) 10px, rgba(255,138,128,0.25) 20px);
+  animation: rocket-target-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rocket-target-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.4); }
+}
+
+/* Settlement (结算阶段) accordion — 7 collapsible sections, each with its
+   own commit/undo/reset footer (admin only). */
+.settlement-accordion { display: flex; flex-direction: column; gap: 10px; }
+.settlement-section {
+  border: 1px solid rgba(214,218,224,0.2); border-radius: 8px; overflow: hidden;
+  background: rgba(0,0,0,0.15);
+}
+.settlement-section.expanded { border-color: rgba(216,178,88,0.5); }
+.settlement-section-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 16px; cursor: pointer; font-weight: 700; font-size: 14px;
+  user-select: none;
+}
+.settlement-section-header:hover { background: rgba(255,255,255,0.04); }
+.settlement-section-body { padding: 4px 16px 16px; }
+.settlement-event-group { margin-bottom: 16px; }
+.settlement-event-group:last-child { margin-bottom: 0; }
+.settlement-footer { display: flex; gap: 10px; margin-top: 14px; }
+
 /* --- Stats --- */
 .stats-wrap { display: flex; justify-content: center; }
 .stats-col { display: flex; flex-direction: column; gap: 22px; width: 460px; max-width: 100%; }
