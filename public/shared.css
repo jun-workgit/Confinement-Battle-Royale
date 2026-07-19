@@ -258,6 +258,20 @@ html, body {
 .switch input:disabled + .switch-slider { opacity: 0.45; }
 .switch input:disabled { cursor: not-allowed; }
 
+/* Wine dice-result picker (settlement items accordion) -- 6 icon chips
+   instead of a plain <select>, with the current pick spelled out below. */
+.wine-picker { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.wine-picker-chips { display: flex; gap: 4px; }
+.wine-chip {
+  width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+  border: 1px solid rgba(216,178,88,0.35); background: rgba(255,255,255,0.05);
+  font-size: 13px; cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.wine-chip:hover:not(:disabled) { border-color: #d8b258; transform: translateY(-1px); }
+.wine-chip.selected { background: #d62839; border-color: #d62839; }
+.wine-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.wine-picker-caption { font-size: 11px; color: #8b9482; white-space: nowrap; }
+
 /* --- Stats --- */
 .stats-wrap { display: flex; justify-content: center; }
 .stats-col { display: flex; flex-direction: column; gap: 22px; width: 460px; max-width: 100%; }

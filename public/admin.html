@@ -349,9 +349,13 @@ function settlementBeforeAfter(committed, currentHealth, delta) {
     : { before: currentHealth, after: currentHealth + delta };
 }
 
+// Every caller of this (surgery/combat/poison/hunger/rocket) is always a
+// health change, so spelling out "生命" removes any doubt at a glance --
+// only the items section has non-health deltas (stat bumps), and it builds
+// its own labeled variance text separately for that reason.
 function settlementDeltaText(delta, icon, committed) {
   if (!delta) return "-";
-  const text = `${icon}${delta > 0 ? "+" : ""}${delta}`;
+  const text = `${icon}生命${delta > 0 ? "+" : ""}${delta}`;
   return committed ? text : `<span class="settlement-preview-delta">${text}（预计）</span>`;
 }
 
@@ -434,6 +438,7 @@ function renderHungerSection(container, sec, draft, state, deltas) {
   const entries = Object.entries(sec.data.toggles);
   container.innerHTML = `
     ${state.round < 2 ? `<div style="color:#8b9482;font-size:13px;margin-bottom:12px;">第 2 回合起才需要上交水/粮，本轮不产生影响。</div>` : ""}
+    <div style="color:#8b9482;font-size:13px;margin-bottom:12px;">开关开启 = 该玩家已上交；关闭 = 未上交，缺水或缺粮各扣 1 点生命（缺两项共扣 2 点）。</div>
     ${entries.length ? `
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>水</th><th>粮</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
@@ -487,13 +492,30 @@ function renderRocketSection(container, sec, draft, deltas) {
 }
 
 const SETTLEMENT_WINE_RESULTS = [
-  { value: 1, label: "1：丢弃所有道具卡" },
-  { value: 2, label: "2：无事发生" },
-  { value: 3, label: "3：武力永久 +1" },
-  { value: 4, label: "4：速度永久 +1" },
-  { value: 5, label: "5：负重永久 +1" },
-  { value: 6, label: "6：生命 +2" },
+  { value: 1, icon: "🗑️", short: "丢弃道具", label: "1：丢弃所有道具卡" },
+  { value: 2, icon: "💤", short: "无事发生", label: "2：无事发生" },
+  { value: 3, icon: "💪", short: "武力+1", label: "3：武力永久 +1" },
+  { value: 4, icon: "🏃", short: "速度+1", label: "4：速度永久 +1" },
+  { value: 5, icon: "💼", short: "负重+1", label: "5：负重永久 +1" },
+  { value: 6, icon: "❤️", short: "生命+2", label: "6：生命 +2" },
 ];
+
+// A row of 6 icon chips (one per dice face) instead of a plain <select> --
+// hover/long-press shows the full rule text via the title attribute, and the
+// current pick's short label is spelled out underneath so it's still
+// readable without hovering.
+function wineResultPickerHtml(pid, wineResult, disabled) {
+  const current = SETTLEMENT_WINE_RESULTS.find((w) => w.value === wineResult);
+  return `
+    <div class="wine-picker">
+      <div class="wine-picker-chips">
+        ${SETTLEMENT_WINE_RESULTS.map((w) => `
+          <button type="button" class="wine-chip ${wineResult === w.value ? "selected" : ""}" data-pid="${pid}" data-value="${w.value}" title="${w.label}" ${disabled ? "disabled" : ""}>${w.icon}</button>
+        `).join("")}
+      </div>
+      <div class="wine-picker-caption">${current ? current.short : "未选择骰子结果"}</div>
+    </div>`;
+}
 
 function renderItemsSection(container, sec, draft, deltas) {
   const entries = Object.entries(sec.data.toggles);
@@ -518,12 +540,7 @@ function renderItemsSection(container, sec, draft, deltas) {
             <td>${settlementPlayerLabel(pid)}</td>
             <td>${settlementSwitchHtml("settlement-item-toggle", `data-pid="${pid}" data-field="pill"`, t.pill, sec.committed)}</td>
             <td>${settlementSwitchHtml("settlement-item-toggle", `data-pid="${pid}" data-field="wine"`, t.wine, sec.committed)}</td>
-            <td>${t.wine
-              ? `<select class="settlement-wine-result" data-pid="${pid}" ${sec.committed ? "disabled" : ""}>
-                   <option value="">选择骰子结果</option>
-                   ${SETTLEMENT_WINE_RESULTS.map((w) => `<option value="${w.value}" ${t.wineResult === w.value ? "selected" : ""}>${w.label}</option>`).join("")}
-                 </select>`
-              : "-"}</td>
+            <td>${t.wine ? wineResultPickerHtml(pid, t.wineResult, sec.committed) : "-"}</td>
             <td>${settlementSwitchHtml("settlement-item-toggle", `data-pid="${pid}" data-field="adrenaline"`, t.adrenaline, sec.committed)}</td>
             <td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${variance.join(" ") || "-"}</td>
           </tr>`;
@@ -539,10 +556,10 @@ function renderItemsSection(container, sec, draft, deltas) {
       socket.send({ type: "admin:settlementSetSectionData", section: "items", data: { toggles: newToggles }, password: adminPassword });
     });
   });
-  container.querySelectorAll(".settlement-wine-result").forEach((sel) => {
-    sel.addEventListener("change", () => {
-      const pid = sel.dataset.pid;
-      const newToggles = { ...sec.data.toggles, [pid]: { ...sec.data.toggles[pid], wineResult: sel.value ? Number(sel.value) : null } };
+  container.querySelectorAll(".wine-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pid = btn.dataset.pid;
+      const newToggles = { ...sec.data.toggles, [pid]: { ...sec.data.toggles[pid], wineResult: Number(btn.dataset.value) } };
       socket.send({ type: "admin:settlementSetSectionData", section: "items", data: { toggles: newToggles }, password: adminPassword });
     });
   });
