@@ -35,7 +35,12 @@ const socket = connectGameSocket((state) => {
 });
 startTimerTicker(() => latestState && latestState.timer);
 
+// ?playerId=N (used by /simulator.html to pin multiple same-origin iframes to
+// distinct players — they'd otherwise all collide on the one shared
+// localStorage key) takes priority over the normal stored selection.
 function myPlayerId() {
+  const forced = Number(new URLSearchParams(location.search).get("playerId"));
+  if (Number.isFinite(forced) && forced > 0) return forced;
   const v = Number(localStorage.getItem(LS_KEY));
   return Number.isFinite(v) && v > 0 ? v : null;
 }

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>禁闭逃杀 — 多设备模拟器</title>
+<link rel="icon" type="image/png" href="/assets/player-dead.png">
+<link rel="stylesheet" href="/shared.css">
+<style>
+  body { background: #14161a; }
+  .simulator-page { padding: 24px; }
+  .simulator-title { font-size: 20px; font-weight: 700; color: #d8b258; margin-bottom: 4px; }
+  .simulator-subtitle { font-size: 13px; color: #8b9482; margin-bottom: 20px; max-width: 720px; }
+  .simulator-controls {
+    display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+    padding: 14px 18px; border-radius: 10px; background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(214,218,224,0.15); margin-bottom: 24px;
+  }
+  .simulator-controls label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #dfe1e4; }
+  .simulator-controls input[type="number"] { width: 64px; }
+  .simulator-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+  .phone-frame { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .phone-frame-label { font-weight: 700; font-size: 13px; color: #d8b258; }
+  .phone-frame-bezel {
+    width: 300px; height: 650px; border-radius: 32px; border: 8px solid #1a1d21;
+    background: #000; box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+  }
+  .phone-frame-bezel iframe { width: 100%; height: 100%; border: none; display: block; }
+</style>
+</head>
+<body>
+<div class="simulator-page">
+  <div class="simulator-title">禁闭逃杀 · 多设备模拟器</div>
+  <div class="simulator-subtitle">
+    仅供本地测试使用，未链接在正式导航中。每个手机框都是一个独立的玩家视图，
+    通过 URL 参数固定身份，互不影响彼此的登录状态。
+  </div>
+  <div class="simulator-controls">
+    <label>玩家数量 <input type="number" id="sim-player-count" min="1" max="30" value="4"></label>
+    <label><input type="checkbox" id="sim-include-admin"> 包含管理员视图</label>
+    <label><input type="checkbox" id="sim-include-public"> 包含大屏视图</label>
+    <button class="btn" id="sim-apply-btn">应用</button>
+    <button class="btn secondary" id="sim-reload-all-btn">全部刷新</button>
+  </div>
+  <div class="simulator-grid" id="sim-grid"></div>
+</div>
+
+<script src="/ws-client.js"></script>
+<script>
+const grid = document.getElementById("sim-grid");
+const countInput = document.getElementById("sim-player-count");
+const adminCheckbox = document.getElementById("sim-include-admin");
+const publicCheckbox = document.getElementById("sim-include-public");
+
+function phoneFrameHtml(label, src) {
+  return `
+    <div class="phone-frame">
+      <div class="phone-frame-label">${label}</div>
+      <div class="phone-frame-bezel"><iframe src="${src}"></iframe></div>
+    </div>`;
+}
+
+function buildGrid() {
+  const n = Math.max(1, Math.min(30, Math.round(Number(countInput.value) || 0)));
+  let html = "";
+  for (let i = 1; i <= n; i++) {
+    html += phoneFrameHtml(`玩家 ${i}`, `/index.html?playerId=${i}`);
+  }
+  if (adminCheckbox.checked) html += phoneFrameHtml("管理员视图", "/admin.html");
+  if (publicCheckbox.checked) html += phoneFrameHtml("大屏视图", "/public.html");
+  grid.innerHTML = html;
+}
+
+document.getElementById("sim-apply-btn").addEventListener("click", buildGrid);
+document.getElementById("sim-reload-all-btn").addEventListener("click", () => {
+  grid.querySelectorAll("iframe").forEach((f) => {
+    try { f.contentWindow.location.reload(); } catch { /* same-origin, shouldn't happen */ }
+  });
+});
+
+// Best-effort: once connected, prefill the player-count input from the live
+// game's playerCount so the default grid matches whatever game is already
+// running, instead of an arbitrary guess. Only applies once, before the
+// admin has had a chance to type their own value.
+let prefilled = false;
+connectGameSocket((state) => {
+  if (!prefilled && state && state.playerCount) {
+    countInput.value = state.playerCount;
+    prefilled = true;
+    buildGrid();
+  }
+});
+
+buildGrid();
+</script>
+</body>
+</html>
