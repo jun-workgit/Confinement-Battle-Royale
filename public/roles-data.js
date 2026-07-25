@@ -173,6 +173,14 @@ const ROLE_SKILL_LIMITS = {
   hacker: 3,        // 黑客 · 基因室/控制室/操作室功能（各1次）
 };
 
+// Roles whose stat bonus is a one-time permanent grant the moment they're
+// assigned (before Round 1), rather than a repeatable action — settled into
+// the Round 0 "combat" accordion alongside spawn-room fights. Currently only
+// 驯兽师's "你的武力和负重永久+1".
+const ROLE_ASSIGN_BONUSES = {
+  beast_tamer: { power: 1, weight: 1 },
+};
+
 if (typeof module !== "undefined") {
-  module.exports = { ROLES, ROLE_ID_SET, getRole, ROLE_SKILL_LIMITS };
+  module.exports = { ROLES, ROLE_ID_SET, getRole, ROLE_SKILL_LIMITS, ROLE_ASSIGN_BONUSES };
 }

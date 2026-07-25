@@ -7,7 +7,7 @@ const {
   FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE,
   UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun,
 } = require("./public/map-data.js");
-const { ROLE_ID_SET, ROLE_SKILL_LIMITS } = require("./public/roles-data.js");
+const { ROLE_ID_SET, ROLE_SKILL_LIMITS, ROLE_ASSIGN_BONUSES } = require("./public/roles-data.js");
 
 const STATE_FILE = path.join(__dirname, "game-state.json");
 const FLOOR_IDS = new Set(FLOORS.map((f) => f.id));
@@ -264,6 +264,19 @@ function poisonDamageForRound(table, round) {
   return row ? row.damage : 0;
 }
 
+// Round-0-only: any player whose assigned role grants a one-time permanent
+// stat bonus (see ROLE_ASSIGN_BONUSES) gets it recorded here so it settles
+// into Round 1 alongside that round's spawn-room fights, instead of the
+// bonus silently never being applied anywhere.
+function computeRoleAssignBonuses(working) {
+  const out = [];
+  for (const p of working) {
+    const bonus = p.roleId && ROLE_ASSIGN_BONUSES[p.roleId];
+    if (bonus) out.push({ playerId: p.id, roleId: p.roleId, stats: { ...bonus } });
+  }
+  return out;
+}
+
 // Auto-computed default data for each section, derived from `working` (the
 // draft's current health/stats) plus whatever admin has tracked this round
 // (floor votes, rocket target). Admin can override individual fields
@@ -276,7 +289,13 @@ function computeSectionDefault(section, working, state) {
       return { outcome, playerIds: occupants.map((p) => p.id) };
     }
     case "combat": {
-      return { events: computeRoomEvents(working) };
+      const data = { events: computeRoomEvents(working) };
+      // Round 0 (still Prep, before Round 1) has no real combat yet — this
+      // section instead carries spawn-room fights (players who secretly
+      // chose the same spawn room, already covered by computeRoomEvents
+      // above) plus one-time role-assignment bonuses like 驯兽师's.
+      if (state.round === 0) data.roleBonuses = computeRoleAssignBonuses(working);
+      return data;
     }
     case "poison": {
       const tally = {};
@@ -349,6 +368,14 @@ function commitSectionEffect(section, data, working, state) {
     }
   } else if (section === "combat") {
     combatAutoLoss = {};
+    // Round-0-only permanent role bonuses (see computeRoleAssignBonuses) —
+    // pure stat deltas, applied the same way a wine-card stat bump is,
+    // independent of any spawn-room fight computed below.
+    if (data.roleBonuses) {
+      for (const rb of data.roleBonuses) {
+        statDeltas[rb.playerId] = { ...statDeltas[rb.playerId], ...rb.stats };
+      }
+    }
     for (const ev of data.events) {
       if (ev.kind === "single") {
         // 8/9's "若交战时对方无枪，则无需比较武力，对方直接扣除等同己方武力
@@ -497,6 +524,18 @@ function startSettlementDraft(state) {
   for (const name of ["surgery", "combat", "poison", "hunger", "rocket", "items", "revival"]) {
     sections[name] = { committed: false, data: computeSectionDefault(name, working, state), applied: null };
   }
+  // Round 0 (still Prep, before Round 1) has nothing yet for surgery/poison/
+  // hunger/rocket/items/revival to describe — their computed defaults are
+  // already a strict no-op this early (e.g. hunger only bites from Round 2,
+  // B202 isn't a valid spawn room). Auto-commit them so admin only ever has
+  // to look at "combat" (spawn-room fights + role-assignment bonuses).
+  if (state.round === 0) {
+    for (const name of ["surgery", "poison", "hunger", "rocket", "items", "revival"]) {
+      const sec = sections[name];
+      sec.applied = commitSectionEffect(name, sec.data, working, state);
+      sec.committed = true;
+    }
+  }
   state.settlementDraft = { round: state.round, baseline: snapshot, working, sections };
 }
 
@@ -569,7 +608,8 @@ function buildSettlementLogEntries(state, draft) {
       } else if (key === "combat") {
         const ev = sec.data.events.find((e) => e.playerIds.includes(id));
         const autoLoss = !!(sec.applied.extra && sec.applied.extra.autoLoss && sec.applied.extra.autoLoss[id]);
-        detail = { kind: ev ? ev.kind : null, autoLoss };
+        const roleBonus = sec.data.roleBonuses && sec.data.roleBonuses.find((rb) => rb.playerId === id);
+        detail = { kind: ev ? ev.kind : null, autoLoss, roleBonus: roleBonus ? { roleId: roleBonus.roleId, stats: roleBonus.stats } : null };
         room = ev ? ev.room : null;
       } else if (key === "poison") {
         const wp = draft.working.find((p) => p.id === id);
@@ -599,6 +639,7 @@ function buildSettlementLogEntries(state, draft) {
 }
 
 const app = express();
+app.disable("x-powered-by");
 app.use(express.json());
 // extensions lets e.g. /simulator resolve to /simulator.html without a redirect.
 app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
@@ -607,7 +648,7 @@ app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] })
 // the static-file/game-state overhead of hitting "/" just to keep the
 // Render free-tier instance from spinning down on inactivity.
 app.get("/healthz", (req, res) => {
-  res.status(200).send("ok");
+  res.status(200).end();
 });
 
 // Extension-less aliases so links can read "/admin" / "/public" instead of
@@ -792,12 +833,6 @@ wss.on("connection", (ws) => {
         state.poisonDamageTable = clean;
         break;
       }
-      case "admin:startGame": {
-        if (state.phase !== "prep") return;
-        state.phase = "in_progress";
-        state.round = 1;
-        break;
-      }
       case "admin:endGame": {
         if (state.phase !== "in_progress") return;
         state.phase = "ended";
@@ -912,7 +947,11 @@ wss.on("connection", (ws) => {
       // re-entering settlement after "取消结算" (a client-side-only exit,
       // no server message) resumes exactly where admin left off.
       case "admin:startSettlement": {
-        if (state.phase !== "in_progress") return;
+        // Round 0's settlement (spawn-room fights + role-assignment bonuses)
+        // runs during Prep, before the game has actually "started" — see
+        // admin:finishSettlement, which is what flips phase to in_progress.
+        const isRoundZeroPrep = state.phase === "prep" && state.round === 0;
+        if (state.phase !== "in_progress" && !isRoundZeroPrep) return;
         startSettlementDraft(state);
         break;
       }
@@ -998,6 +1037,13 @@ wss.on("connection", (ws) => {
         state.settlementDraft = null;
         state.floorVotes = {};
         state.rocketTargetRoom = null;
+        // Round 0's settlement is what actually starts the game -- there's
+        // no separate admin:startGame anymore, so finishing it here both
+        // applies its one-off effects and flips Prep -> in_progress, right
+        // before advancing to Round 1 below (0 < MAX_ROUND always holds).
+        if (state.phase === "prep" && draft.round === 0) {
+          state.phase = "in_progress";
+        }
         if (state.round >= MAX_ROUND) {
           state.phase = "ended";
         } else {

@@ -291,6 +291,11 @@ function previewSectionDeltas(key, sec, draft, state) {
       for (const id of sec.data.playerIds) bump(id, 4);
     }
   } else if (key === "combat") {
+    if (sec.data.roleBonuses) {
+      for (const rb of sec.data.roleBonuses) {
+        statDeltas[rb.playerId] = { ...statDeltas[rb.playerId], ...rb.stats };
+      }
+    }
     for (const ev of sec.data.events) {
       if (ev.kind === "single") {
         const [aId, bId] = ev.playerIds;
@@ -428,10 +433,33 @@ function renderSurgerySection(container, sec, draft, deltas) {
   wireSettlementFooter(container, "surgery");
 }
 
+// Round-0-only: role-assignment bonuses (e.g. 驯兽师's permanent +1 武力/+1
+// 负重) settled alongside spawn-room fights. Read-only -- these are fixed by
+// ROLE_ASSIGN_BONUSES, nothing here for admin to edit before committing.
+function roleBonusesHtml(roleBonuses) {
+  if (!roleBonuses || !roleBonuses.length) return "";
+  return `
+    <div style="margin-bottom:16px;">
+      <div style="font-weight:700;margin-bottom:6px;">职业加成</div>
+      <div style="overflow-x:auto;"><table class="stats-table">
+        <thead><tr><th>玩家</th><th>职业</th><th>加成</th></tr></thead>
+        <tbody>${roleBonuses.map((rb) => {
+          const role = getRole(rb.roleId);
+          const parts = [];
+          if (rb.stats.power) parts.push(`武力+${rb.stats.power}`);
+          if (rb.stats.speed) parts.push(`速度+${rb.stats.speed}`);
+          if (rb.stats.weight) parts.push(`负重+${rb.stats.weight}`);
+          return `<tr><td>${settlementPlayerLabel(rb.playerId)}</td><td>${role ? role.name : rb.roleId}</td><td>${parts.join("，") || "-"}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+}
+
 function renderCombatSection(container, sec, draft, deltas, state) {
   const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
   const kindIcon = { single: "⚔️", multi: "⚔️", shadow: "👻" };
   container.innerHTML = `
+    ${roleBonusesHtml(sec.data.roleBonuses)}
     ${sec.data.events.length ? sec.data.events.map((ev) => {
       const players = ev.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
       // 8/9's "opponent has no gun -> direct loss" rule only has a clean
@@ -847,7 +875,7 @@ function renderDashboard(state) {
           <div class="tab ${adminTab === "players" ? "active" : ""}" id="admin-tab-players">玩家属性</div>
           <div class="tab ${adminTab === "map" ? "active" : ""}" id="admin-tab-map">地图</div>
           <div class="tab ${adminTab === "poison" ? "active" : ""}" id="admin-tab-poison">毒气伤害</div>
-          ${isProgress ? `<div class="tab ${adminTab === "settlement" ? "active" : ""}" id="admin-tab-settlement">结算阶段</div>` : ""}
+          ${isProgress || (isPrep && inSettlement) ? `<div class="tab ${adminTab === "settlement" ? "active" : ""}" id="admin-tab-settlement">结算阶段</div>` : ""}
           <div class="tab ${adminTab === "ranking" ? "active" : ""}" id="admin-tab-ranking">排行榜</div>
           <div class="tab ${adminTab === "rules" ? "active" : ""}" id="admin-tab-rules">游戏规则</div>
           <div class="tab ${adminTab === "timer" ? "active" : ""}" id="admin-tab-timer">计时器</div>
@@ -1048,7 +1076,15 @@ function renderDashboard(state) {
 
   if (isPrep) {
     panel.querySelector("#start-btn").addEventListener("click", () => {
-      if (!isEditing) socket.send({ type: "admin:startGame", password: adminPassword });
+      if (isEditing) return;
+      // "开始游戏" no longer flips phase directly -- it opens Round 0's
+      // settlement (spawn-room fights + role-assignment bonuses like 驯兽师's);
+      // finishing that settlement is what actually starts the game.
+      inSettlement = true;
+      adminTab = "settlement";
+      expandedSettlementSection = "combat";
+      socket.send({ type: "admin:startSettlement", password: adminPassword });
+      render();
     });
   }
   if (isProgress) {
@@ -1430,9 +1466,21 @@ function playerLogSourceLabel(entry) {
   switch (entry.source) {
     case "surgery": return "手术室 · 手术成功";
     case "combat": {
-      const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
-      const base = `战斗 · ${kindLabel[entry.detail.kind] || entry.detail.kind || ""}`;
-      return entry.detail.autoLoss ? `${base}（对方持枪，己方无枪，直接判负）` : base;
+      // A Round-0 player can carry BOTH a role-assignment bonus and a real
+      // spawn-room fight in the same entry -- neither should silently hide
+      // the other, so build up whichever parts actually apply.
+      const parts = [];
+      if (entry.detail.roleBonus) {
+        const role = getRole(entry.detail.roleBonus.roleId);
+        parts.push(`职业加成 · ${role ? role.name : entry.detail.roleBonus.roleId}`);
+      }
+      if (entry.detail.kind) {
+        const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
+        let base = `战斗 · ${kindLabel[entry.detail.kind] || entry.detail.kind}`;
+        if (entry.detail.autoLoss) base += "（对方持枪，己方无枪，直接判负）";
+        parts.push(base);
+      }
+      return parts.join("；") || "战斗";
     }
     case "poison": return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}`;
     case "hunger": {
