@@ -280,6 +280,15 @@ function playerItemsClient(state, playerId) {
   return (p && p.items) || defaultPlayerItems();
 }
 
+// Round-0-only: how much of a player's power in this combat calc comes from
+// a role-assignment bonus (see ROLE_ASSIGN_BONUSES) -- read-only lookup, used
+// wherever combat math needs the boosted power without mutating draft.working
+// (which is reused across re-renders, so mutating it here would compound).
+function roleBonusPowerFor(playerId, roleBonuses) {
+  const rb = roleBonuses && roleBonuses.find((r) => r.playerId === playerId);
+  return (rb && rb.stats.power) || 0;
+}
+
 function previewSectionDeltas(key, sec, draft, state) {
   const healthDeltas = {};
   const statDeltas = {};
@@ -303,8 +312,8 @@ function previewSectionDeltas(key, sec, draft, state) {
         if (!a || !b) continue;
         const aItems = playerItemsClient(state, aId);
         const bItems = playerItemsClient(state, bId);
-        const aPower = a.stats.power + weaponPowerBonus(aItems);
-        const bPower = b.stats.power + weaponPowerBonus(bItems);
+        const aPower = a.stats.power + roleBonusPowerFor(aId, sec.data.roleBonuses) + weaponPowerBonus(aItems);
+        const bPower = b.stats.power + roleBonusPowerFor(bId, sec.data.roleBonuses) + weaponPowerBonus(bItems);
         const aGun = hasGun(aItems), bGun = hasGun(bItems);
         if (aGun && !bGun) bump(bId, -aPower);
         else if (bGun && !aGun) bump(aId, -bPower);
@@ -314,7 +323,7 @@ function previewSectionDeltas(key, sec, draft, state) {
         }
       } else if (ev.kind === "multi") {
         const players = ev.playerIds.map(find).filter(Boolean);
-        const powers = players.map((p) => ({ id: p.id, power: p.stats.power + weaponPowerBonus(playerItemsClient(state, p.id)) }));
+        const powers = players.map((p) => ({ id: p.id, power: p.stats.power + roleBonusPowerFor(p.id, sec.data.roleBonuses) + weaponPowerBonus(playerItemsClient(state, p.id)) }));
         const maxPower = Math.max(...powers.map((x) => x.power));
         for (const { id, power } of powers) {
           const dmg = maxPower - power;
@@ -483,7 +492,9 @@ function renderCombatSection(container, sec, draft, deltas, state) {
               const delta = settlementHealthDelta(deltas, p.id);
               const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
               const badges = weaponBadgesHtml(playerItemsClient(state, p.id));
-              const powerCell = badges ? `${p.stats.power} <span style="color:#8b9482;">${badges}</span>` : `${p.stats.power}`;
+              const roleBonusPower = roleBonusPowerFor(p.id, sec.data.roleBonuses);
+              const powerBase = roleBonusPower ? `${p.stats.power}+${roleBonusPower}=${p.stats.power + roleBonusPower}` : `${p.stats.power}`;
+              const powerCell = badges ? `${powerBase} <span style="color:#8b9482;">${badges}</span>` : powerBase;
               const autoLossTag = p.id === autoLossId ? `<span class="pill-tag red" style="margin-left:6px;">对方持枪，直接判负</span>` : "";
               return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${autoLossTag}</td><td>${powerCell}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
             }).join("")}</tbody>

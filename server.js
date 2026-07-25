@@ -361,6 +361,7 @@ function commitSectionEffect(section, data, working, state) {
   const bump = (id, dh) => { healthDeltas[id] = (healthDeltas[id] || 0) + dh; };
   const find = (id) => working.find((p) => p.id === id);
   let combatAutoLoss = null;
+  let combatRoleBonusDeltas = null;
 
   if (section === "surgery") {
     if (data.outcome === "success") {
@@ -368,12 +369,19 @@ function commitSectionEffect(section, data, working, state) {
     }
   } else if (section === "combat") {
     combatAutoLoss = {};
-    // Round-0-only permanent role bonuses (see computeRoleAssignBonuses) —
-    // pure stat deltas, applied the same way a wine-card stat bump is,
-    // independent of any spawn-room fight computed below.
+    // Round-0-only permanent role bonuses (see computeRoleAssignBonuses) --
+    // applied to `working` right away, BEFORE this round's spawn-room fights
+    // are evaluated below, so e.g. 驯兽师's +1 power already counts toward
+    // their own fight. Tracked separately from `statDeltas` and merged in
+    // further down (after the generic statDeltas-apply loop already ran for
+    // every OTHER section) so this mutation is never applied a second time.
     if (data.roleBonuses) {
+      combatRoleBonusDeltas = {};
       for (const rb of data.roleBonuses) {
-        statDeltas[rb.playerId] = { ...statDeltas[rb.playerId], ...rb.stats };
+        const p = find(rb.playerId);
+        if (!p) continue;
+        for (const k of Object.keys(rb.stats)) p.stats[k] = (p.stats[k] || 0) + rb.stats[k];
+        combatRoleBonusDeltas[rb.playerId] = { ...combatRoleBonusDeltas[rb.playerId], ...rb.stats };
       }
     }
     for (const ev of data.events) {
@@ -472,6 +480,15 @@ function commitSectionEffect(section, data, working, state) {
   for (const [id, ds] of Object.entries(statDeltas)) {
     const p = find(Number(id));
     if (p) for (const k of Object.keys(ds)) p.stats[k] = (p.stats[k] || 0) + ds[k];
+  }
+  // Merged in AFTER the loop above (not before) -- combatRoleBonusDeltas was
+  // already applied to `working` directly earlier in the "combat" branch, so
+  // folding it into `statDeltas` only here (for the log/undo record) avoids
+  // applying it to player stats twice.
+  if (combatRoleBonusDeltas) {
+    for (const [id, ds] of Object.entries(combatRoleBonusDeltas)) {
+      statDeltas[id] = { ...statDeltas[id], ...ds };
+    }
   }
 
   // Revival is the one section where crossing the health>=0 threshold is a
