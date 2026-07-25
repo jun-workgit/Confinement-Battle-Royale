@@ -687,7 +687,7 @@ function renderMap(container, poisonFloors, interactive, lang) {
     <div class="map-wrap ${interactive ? "interactive" : ""}">
       <div class="floor-col">
         ${FLOORS.map(
-          (f) => `<div class="floor-chip ${poisoned.has(f.id) ? "poisoned" : ""}" data-floor="${f.id}" style="top:${f.top}%;height:${f.height}%;">
+          (f) => `<div class="floor-chip ${poisoned.has(f.id) ? "poisoned" : ""}" data-floor="${f.id}" style="top:${f.top}%;min-height:${f.height}%;">
             <span>${f.label}</span>${poisoned.has(f.id) ? '<span class="skull">☠</span>' : ""}
           </div>`
         ).join("")}

@@ -264,6 +264,15 @@ function poisonDamageForRound(table, round) {
   return row ? row.damage : 0;
 }
 
+// 意见领袖's "你有额外 N×2（N为其他勇士数）张票用于毒气投票" -- everyone
+// else gets exactly 1 poison-floor vote; this role's total budget is 1 (the
+// same baseline everyone has) plus 2x the number of OTHER players.
+function floorVoteCapFor(player, state) {
+  if (player.roleId !== "opinion_leader") return 1;
+  const others = Math.max(0, (state.playerCount || 0) - 1);
+  return 1 + others * 2;
+}
+
 // Round-0-only: any player whose assigned role grants a one-time permanent
 // stat bonus (see ROLE_ASSIGN_BONUSES) gets it recorded here so it settles
 // into Round 1 alongside that round's spawn-room fights, instead of the
@@ -299,10 +308,13 @@ function computeSectionDefault(section, working, state) {
     }
     case "poison": {
       const tally = {};
-      for (const [playerId, floor] of Object.entries(state.floorVotes || {})) {
+      // Each player's entry is an array of floor votes (not a single floor) --
+      // everyone else casts at most 1, but 意见领袖 can cast several (see
+      // floorVoteCapFor), each one counting toward the tally in full.
+      for (const [playerId, floors] of Object.entries(state.floorVotes || {})) {
         const voter = working.find((p) => p.id === Number(playerId));
         if (!voter || voter.health <= 0) continue; // shadows don't vote
-        tally[floor] = (tally[floor] || 0) + 1;
+        for (const floor of floors) tally[floor] = (tally[floor] || 0) + 1;
       }
       const counts = Object.values(tally);
       const max = counts.length ? Math.max(...counts) : 0;
@@ -934,16 +946,36 @@ wss.on("connection", (ws) => {
       // Admin drags a player token onto a floor-column label to record their
       // poison-vote indicator — purely informational, distinct from
       // player.room and never moves it. Auto-cleared when the round changes.
+      // Each player's votes are an array (not a single floor): everyone else
+      // is capped at 1 (a fresh drag just reassigns it, same as before), but
+      // 意见领袖's "额外N×2张票" (N = other players) lets them cast several
+      // -- each additional drag onto a floor label appends one more vote
+      // instead of replacing, up to their cap; msg.action:"remove" (used by
+      // clicking a vote dot) takes exactly one matching vote back off.
       case "admin:setFloorVote": {
         if (state.phase !== "in_progress") return;
         const playerId = Math.round(Number(msg.playerId));
         const player = state.players.find((p) => p.id === playerId);
         if (!player) return;
-        if (msg.floor === null) {
+        const votes = state.floorVotes[playerId] || [];
+        if (msg.action === "remove") {
+          if (!FLOOR_IDS.has(msg.floor)) return;
+          const idx = votes.indexOf(msg.floor);
+          if (idx === -1) return;
+          const next = [...votes.slice(0, idx), ...votes.slice(idx + 1)];
+          if (next.length) state.floorVotes[playerId] = next;
+          else delete state.floorVotes[playerId];
+        } else if (msg.floor === null) {
           delete state.floorVotes[playerId];
         } else {
           if (!FLOOR_IDS.has(msg.floor)) return;
-          state.floorVotes[playerId] = msg.floor;
+          const cap = floorVoteCapFor(player, state);
+          if (cap <= 1) {
+            state.floorVotes[playerId] = [msg.floor];
+          } else {
+            if (votes.length >= cap) return; // 意见领袖's bonus votes are exhausted
+            state.floorVotes[playerId] = [...votes, msg.floor];
+          }
         }
         break;
       }

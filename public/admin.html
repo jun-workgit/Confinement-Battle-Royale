@@ -1001,15 +1001,17 @@ function renderDashboard(state) {
     renderMeeples(spawnMapEl.querySelector(".map-img-wrap"), state.players);
   } else if (adminTab === "map" && isProgress) {
     const hackerMark = state.hackerRoomMark && state.hackerRoomMark.round === state.round ? state.hackerRoomMark : null;
+    const opinionLeader = state.players.find((p) => p.roleId === "opinion_leader");
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:16px;margin-bottom:4px;">楼层中毒 / 玩家位置</div>
         <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
           ${isEditing ? "点击左侧楼层标签以激活/解除该层中毒（需点击“确认”生效）" : "点击上方“编辑”以修改中毒楼层"}
           · 拖动玩家图标到房间中标记位置（立即生效，拖回下方框内可移除）
-          · 拖动玩家图标到左侧楼层标签记录本轮投毒意向（仅作标记，不影响其房间位置）
+          · 拖动玩家图标到左侧楼层标签记录本轮投毒意向（每人限1票，会覆盖其上一票；点击票数圆点可取消）
         </div>
         ${hackerMark ? `<div style="font-size:13px;color:#ff8a80;margin-bottom:12px;">黑客本轮秘密关闭：<b>${getRoomLabel(hackerMark.room)}</b>（仅黑客本人与管理员可见）</div>` : ""}
+        ${opinionLeader ? `<div style="font-size:13px;color:#d8b258;margin-bottom:12px;">意见领袖（玩家 ${opinionLeader.id}）额外票数：${floorVoteUsedFor(opinionLeader, state)}/${floorVoteCapFor(opinionLeader, state) - 1}（每次拖动其图标到楼层再投1票，含首票共上限 ${floorVoteCapFor(opinionLeader, state)} 票）</div>` : ""}
         <div class="rocket-tray">
           <div class="rocket-icon" id="rocket-drag-icon" title="拖动到房间标记本轮火箭筒袭击目标">🚀</div>
           ${state.rocketTargetRoom
@@ -1182,22 +1184,47 @@ function attachMeepleDrag(el, state) {
   });
 }
 
+// Mirrors server.js's floorVoteCapFor exactly -- display-only here (the
+// server is the actual source of truth/enforcement).
+function floorVoteCapFor(player, state) {
+  if (player.roleId !== "opinion_leader") return 1;
+  const others = Math.max(0, (state.playerCount || 0) - 1);
+  return 1 + others * 2;
+}
+function floorVoteUsedFor(player, state) {
+  const votes = (state.floorVotes && state.floorVotes[player.id]) || [];
+  return Math.max(0, votes.length - 1); // the first vote is everyone's normal baseline, not a "bonus" use
+}
+
 // Small colored dots on each floor-column label showing which players'
-// tokens were dragged there this round — purely a voting indicator.
+// tokens were dragged there this round — purely a voting indicator. Clicking
+// a dot cancels that one player's vote (same effect as dragging their token
+// back off the floor label), without needing to touch the drag interaction.
 function renderFloorVoteBadges(mapEl, state) {
   mapEl.querySelectorAll(".floor-vote-badges").forEach((el) => el.remove());
+  mapEl.querySelectorAll(".floor-chip.has-votes").forEach((el) => el.classList.remove("has-votes"));
+  // Each player's entry is an array of floor votes -- 意见领袖 can have
+  // several, including more than one for the SAME floor, so a player's dot
+  // can legitimately appear more than once within one floor's cluster.
   const votesByFloor = {};
-  for (const [playerId, floor] of Object.entries(state.floorVotes || {})) {
-    (votesByFloor[floor] = votesByFloor[floor] || []).push(Number(playerId));
+  for (const [playerId, floors] of Object.entries(state.floorVotes || {})) {
+    for (const floor of floors) (votesByFloor[floor] = votesByFloor[floor] || []).push(Number(playerId));
   }
   for (const [floor, playerIds] of Object.entries(votesByFloor)) {
     const chip = mapEl.querySelector(`.floor-chip[data-floor="${floor}"]`);
     if (!chip) continue;
+    chip.classList.add("has-votes");
     const badges = document.createElement("div");
     badges.className = "floor-vote-badges";
-    badges.innerHTML = playerIds.map((pid) => `<span class="floor-vote-dot" style="background:${meepleColor(pid)};">${pid}</span>`).join("");
+    badges.innerHTML = playerIds.map((pid) => `<span class="floor-vote-dot" data-vote-pid="${pid}" data-vote-floor="${floor}" title="点击取消该玩家在此楼层的一票" style="background:${meepleColor(pid)};">${pid}</span>`).join("");
     chip.appendChild(badges);
   }
+  mapEl.querySelectorAll(".floor-vote-dot[data-vote-pid]").forEach((dot) => {
+    dot.addEventListener("click", (e) => {
+      e.stopPropagation(); // don't also trigger the chip's own poison-toggle click
+      socket.send({ type: "admin:setFloorVote", playerId: Number(dot.dataset.votePid), floor: dot.dataset.voteFloor, action: "remove", password: adminPassword });
+    });
+  });
 }
 
 // Same Pointer Events drag pattern as attachMeepleDrag, but for the single
