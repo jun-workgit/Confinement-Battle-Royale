@@ -340,9 +340,13 @@ function computeSectionDefault(section, working, state) {
         if (p.health <= 0) continue; // shadows don't hand in water/food
         // Opt-in: admin actively checks a player off as having handed
         // water/food in, rather than un-checking those who didn't. A B204
-        // player is exempt either way, so their toggles start (and stay) true.
-        const exempt = p.room === "B204";
-        toggles[p.id] = { water: exempt, food: exempt, exempt };
+        // player is exempt either way, so their toggles start (and stay) true
+        // -- same for anyone who revived last round ("复活后的第一轮...不需
+        // 上交水粮").
+        const realPlayer = state.players.find((pp) => pp.id === p.id);
+        const justRevived = !!(realPlayer && realPlayer.revivedProtectedRound === state.round);
+        const exempt = p.room === "B204" || justRevived;
+        toggles[p.id] = { water: exempt, food: exempt, exempt, reason: p.room === "B204" ? "B204" : justRevived ? "revived" : null };
       }
       return { toggles };
     }
@@ -360,14 +364,21 @@ function computeSectionDefault(section, working, state) {
       return { toggles };
     }
     case "revival": {
-      const events = computeRoomEvents(working).filter((e) => e.kind === "shadow");
+      // The Shadow's actual absorption gain is applied by "combat"'s
+      // shadow-meet event (see commitSectionEffect), not here -- this
+      // section's job is purely to notice, from CURRENT working health
+      // (already reflecting combat's gain if it's been committed), who's
+      // now crossed back to >=0 and finalize their revival. Comparing
+      // against state.players (untouched until finishSettlement, so it's
+      // still this round's starting health) gives "how much they've
+      // absorbed so far this round" for the "本轮吸取" display, independent
+      // of whether combat has actually been committed yet.
       const preview = {};
-      for (const e of events) {
-        const livingCount = working.filter((p) => e.playerIds.includes(p.id) && p.health > 0).length;
-        for (const p of working) {
-          if (!e.playerIds.includes(p.id) || p.health > 0) continue;
-          preview[p.id] = (preview[p.id] || 0) + livingCount;
-        }
+      for (const p of working) {
+        const realPlayer = state.players.find((pp) => pp.id === p.id);
+        if (!realPlayer || realPlayer.health > 0) continue; // wasn't a Shadow entering this round
+        const absorbed = p.health - realPlayer.health;
+        if (absorbed > 0) preview[p.id] = absorbed;
       }
       return { absorbedThisRound: preview };
     }
@@ -443,17 +454,31 @@ function commitSectionEffect(section, data, working, state) {
           if (dmg > 0) bump(id, -dmg);
         }
       } else if (ev.kind === "shadow") {
+        // "若'暗影'玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1
+        // 点生命值" -- one drain, two sides: living players lose 1 per
+        // Shadow present, and each Shadow gains 1 per living player present
+        // (this IS the absorption revival is based on, applied here rather
+        // than in "revival" so it's visible in this accordion too).
         const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
+        const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
         for (const p of ev.playerIds.map(find).filter((p) => p && p.health > 0)) {
           bump(p.id, -shadowCount);
+        }
+        for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
+          bump(p.id, livingCount);
         }
       }
     }
   } else if (section === "poison") {
     const damage = poisonDamageForRound(state.poisonDamageTable, state.round);
     for (const p of working) {
-      // 11's 防毒面具 (gas mask) holder is immune to poison-gas damage entirely.
-      if (p.health > 0 && data.floors.includes(roomFloor(p.room)) && !playerItems(state, p.id).gasMask) bump(p.id, -damage);
+      if (p.health <= 0) continue;
+      // 11's 防毒面具 (gas mask) holder is immune to poison-gas damage entirely
+      // -- so is anyone who revived last round, for their first round back.
+      const realPlayer = state.players.find((pp) => pp.id === p.id);
+      const justRevived = realPlayer && realPlayer.revivedProtectedRound === state.round;
+      if (justRevived) continue;
+      if (data.floors.includes(roomFloor(p.room)) && !playerItems(state, p.id).gasMask) bump(p.id, -damage);
     }
   } else if (section === "hunger") {
     if (state.round >= 2) {
@@ -481,11 +506,10 @@ function commitSectionEffect(section, data, working, state) {
       // forward-looking flag, applied when settling THAT future round —
       // not a delta here.
     }
-  } else if (section === "revival") {
-    for (const [playerId, absorbed] of Object.entries(data.absorbedThisRound)) {
-      bump(Number(playerId), absorbed);
-    }
   }
+  // "revival" applies no bump of its own -- the actual absorption already
+  // happened via "combat"'s shadow-meet event; see the health>=0 finalize
+  // block below instead.
 
   for (const [id, dh] of Object.entries(healthDeltas)) {
     const p = find(Number(id));
@@ -520,13 +544,21 @@ function commitSectionEffect(section, data, working, state) {
   // state transition, not just a number: whoever's working health reaches
   // >=0 this round revives with health equal to whatever they actually
   // absorbed (at least 1, since 0 still reads as a shadow everywhere else).
+  // The clamp-up-to-1 adjustment (only ever matters when they land exactly
+  // on 0) is folded into healthDeltas so it's part of the recorded delta --
+  // otherwise undo/logs would only reverse the absorption and silently
+  // leave the +1 clamp behind, permanently drifting their health by 1 every
+  // commit/undo cycle.
   const revivedIds = [];
   if (section === "revival") {
     for (const [playerId] of Object.entries(data.absorbedThisRound)) {
-      const p = find(Number(playerId));
+      const id = Number(playerId);
+      const p = find(id);
       if (p && p.health >= 0) {
+        const beforeClamp = p.health;
         p.health = Math.max(1, p.health);
-        revivedIds.push(p.id);
+        if (p.health !== beforeClamp) healthDeltas[id] = (healthDeltas[id] || 0) + (p.health - beforeClamp);
+        revivedIds.push(id);
       }
     }
   }
@@ -783,6 +815,11 @@ wss.on("connection", (ws) => {
             // health, checked as `=== state.round` (see the clamp in the
             // healthDeltas-apply loop inside commitSectionEffect).
             adrenalineProtectedRound: null,
+            // Set by admin:finishSettlement for whoever revived THIS round --
+            // the following round they're still immune to poison and don't
+            // need to hand in water/food ("复活后的第一轮依然不受'毒气'伤害，
+            // 不需上交水粮"), checked the same way as adrenalineProtectedRound.
+            revivedProtectedRound: null,
           })),
           round: 0,
           poisonFloors: [],
@@ -1057,6 +1094,17 @@ wss.on("connection", (ws) => {
         sec.applied.healthBefore = healthBefore;
         sec.applied.healthAfter = healthAfter;
         sec.committed = true;
+        // Every section's `data` is computed once, at draft creation, from
+        // whatever working looked like before anything was committed --
+        // "revival" is the one section whose own data (absorbedThisRound)
+        // is actually ABOUT the health changes other sections just made (see
+        // computeSectionDefault's "revival" case), so it needs refreshing
+        // against the current working state after every other commit, or it
+        // would keep showing 0 absorption forever, however many sections
+        // (particularly "combat") have already run.
+        if (msg.section !== "revival" && !draft.sections.revival.committed) {
+          draft.sections.revival.data = computeSectionDefault("revival", draft.working, state);
+        }
         break;
       }
       case "admin:settlementUndoSection": {
@@ -1067,6 +1115,12 @@ wss.on("connection", (ws) => {
         undoSectionEffect(msg.section, sec.applied, draft.working, state);
         sec.applied = null;
         sec.committed = false;
+        // Same reasoning as the commit handler -- undoing e.g. "combat"
+        // reverses the Shadow absorption "revival" was showing, so its data
+        // needs refreshing against working's now-reverted state too.
+        if (msg.section !== "revival" && !draft.sections.revival.committed) {
+          draft.sections.revival.data = computeSectionDefault("revival", draft.working, state);
+        }
         break;
       }
       // Resets this section back to its freshly-auto-computed state — undoes
@@ -1130,6 +1184,13 @@ wss.on("connection", (ws) => {
             if (!t.adrenaline) continue;
             const p = state.players.find((pp) => pp.id === Number(idStr));
             if (p) p.adrenalineProtectedRound = nextRound;
+          }
+          // Same idea for anyone who revived THIS round -- immune to poison
+          // and exempt from water/food next round only.
+          const revivalApplied = draft.sections.revival.applied;
+          for (const id of (revivalApplied && revivalApplied.revivedIds) || []) {
+            const p = state.players.find((pp) => pp.id === id);
+            if (p) p.revivedProtectedRound = nextRound;
           }
         }
         state.settlementDraft = null;

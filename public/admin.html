@@ -331,15 +331,22 @@ function previewSectionDeltas(key, sec, draft, state) {
         }
       } else if (ev.kind === "shadow") {
         const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
+        const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
         for (const p of ev.playerIds.map(find).filter((p) => p && p.health > 0)) {
           bump(p.id, -shadowCount);
+        }
+        for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
+          bump(p.id, livingCount);
         }
       }
     }
   } else if (key === "poison") {
     const damage = computePoisonDamageClient(state);
     for (const p of draft.working) {
-      if (p.health > 0 && sec.data.floors.includes(roomFloorClient(p.room)) && !playerItemsClient(state, p.id).gasMask) bump(p.id, -damage);
+      if (p.health <= 0) continue;
+      const realPlayer = state.players.find((pp) => pp.id === p.id);
+      if (realPlayer && realPlayer.revivedProtectedRound === state.round) continue;
+      if (sec.data.floors.includes(roomFloorClient(p.room)) && !playerItemsClient(state, p.id).gasMask) bump(p.id, -damage);
     }
   } else if (key === "hunger") {
     if (state.round >= 2) {
@@ -365,8 +372,18 @@ function previewSectionDeltas(key, sec, draft, state) {
       }
     }
   } else if (key === "revival") {
-    for (const [playerId, absorbed] of Object.entries(sec.data.absorbedThisRound)) {
-      bump(Number(playerId), absorbed);
+    // Absorption itself already happened via "combat"'s shadow-meet event --
+    // this section only finalizes anyone whose health has now reached >=0,
+    // clamping the ambiguous "exactly 0" case up to 1 (its own explicit
+    // delta, mirroring server.js, so the preview matches what commit will
+    // actually record).
+    for (const [playerId] of Object.entries(sec.data.absorbedThisRound)) {
+      const id = Number(playerId);
+      const p = find(id);
+      if (p && p.health >= 0) {
+        const clamped = Math.max(1, p.health);
+        if (clamped !== p.health) bump(id, clamped - p.health);
+      }
     }
   }
 
@@ -528,8 +545,10 @@ function renderPoisonSection(container, sec, draft, deltas, state) {
         <tbody>${affected.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
           const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
-          const immune = playerItemsClient(state, p.id).gasMask;
-          const immuneTag = immune ? `<span class="pill-tag green" style="margin-left:6px;">😷 防毒面具免疫</span>` : "";
+          const gasMask = playerItemsClient(state, p.id).gasMask;
+          const justRevived = state.players.find((pp) => pp.id === p.id)?.revivedProtectedRound === state.round;
+          const immuneTag = gasMask ? `<span class="pill-tag green" style="margin-left:6px;">😷 防毒面具免疫</span>`
+            : justRevived ? `<span class="pill-tag green" style="margin-left:6px;">✨ 复活首轮免疫</span>` : "";
           return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
@@ -553,7 +572,7 @@ function renderHungerSection(container, sec, draft, state, deltas) {
           const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           const locked = sec.committed || t.exempt;
           const waterFoodCells = t.exempt
-            ? `<td colspan="2" style="color:#8b9482;">在 B204 餐厅</td>`
+            ? `<td colspan="2" style="color:#8b9482;">${t.reason === "revived" ? "复活首轮免疫" : "在 B204 餐厅"}</td>`
             : `<td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="water"`, t.water, locked)}</td>
                <td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="food"`, t.food, locked)}</td>`;
           return `<tr>
@@ -1653,6 +1672,12 @@ function wirePlayerLogButtons(container, state) {
 // part of the batched edit/confirm flow" pattern as the room-drag/role-assign
 // actions. Shows nothing for a role with no tracked skill (or no role at all).
 function skillUsesCellHtml(p, state) {
+  // 意见领袖's "ability" is cast entirely through floor-vote drags on the
+  // 地图 tab (see floorVoteCapFor/floorVoteUsedFor), not a manual stepper --
+  // read-only here, same "X/Y" wording as that tab's own display.
+  if (p.roleId === "opinion_leader") {
+    return `<span>${floorVoteUsedFor(p, state)}/${floorVoteCapFor(p, state) - 1}</span>`;
+  }
   if (!p.roleId || !(p.roleId in ROLE_SKILL_LIMITS)) return "-";
   const cap = ROLE_SKILL_LIMITS[p.roleId];
   const used = p.skillUses || 0;
