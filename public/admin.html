@@ -393,13 +393,20 @@ function settlementHealthDelta(deltas, playerId) {
 }
 
 // Pre-commit, draft.working hasn't been touched by this section yet, so the
-// preview delta projects FORWARD from the current health; post-commit,
-// working already reflects it, so the real delta is subtracted back OUT to
-// show what it was before. Same shape either way: {before, after}.
-function settlementBeforeAfter(committed, currentHealth, delta) {
-  return committed
-    ? { before: currentHealth - delta, after: currentHealth }
-    : { before: currentHealth, after: currentHealth + delta };
+// preview delta projects FORWARD from the current (live) health. Post-commit,
+// the server snapshotted this section's own before/after at the moment it
+// was actually committed (sec.applied.healthBefore/healthAfter) -- using
+// THAT instead of the live health is what keeps an already-committed
+// section's numbers frozen and accurate top-to-bottom, even after later
+// sections keep mutating draft.working further.
+function settlementBeforeAfter(sec, playerId, liveHealth, delta) {
+  if (sec.committed && sec.applied && sec.applied.healthBefore && sec.applied.healthAfter
+      && sec.applied.healthBefore[playerId] !== undefined && sec.applied.healthAfter[playerId] !== undefined) {
+    return { before: sec.applied.healthBefore[playerId], after: sec.applied.healthAfter[playerId] };
+  }
+  return sec.committed
+    ? { before: liveHealth - delta, after: liveHealth }
+    : { before: liveHealth, after: liveHealth + delta };
 }
 
 // Every caller of this (surgery/combat/poison/hunger/rocket) is always a
@@ -433,7 +440,7 @@ function renderSurgerySection(container, sec, draft, deltas) {
         <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${involved.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
-          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "❤️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">B202 手术室内存活人数不足以触发手术。</div>`}
@@ -490,7 +497,7 @@ function renderCombatSection(container, sec, draft, deltas, state) {
             <thead><tr><th>玩家</th><th>武力</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
             <tbody>${players.map((p) => {
               const delta = settlementHealthDelta(deltas, p.id);
-              const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+              const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
               const badges = weaponBadgesHtml(playerItemsClient(state, p.id));
               const roleBonusPower = roleBonusPowerFor(p.id, sec.data.roleBonuses);
               const powerBase = roleBonusPower ? `${p.stats.power}+${roleBonusPower}=${p.stats.power + roleBonusPower}` : `${p.stats.power}`;
@@ -520,7 +527,7 @@ function renderPoisonSection(container, sec, draft, deltas, state) {
         <thead><tr><th>玩家</th><th>房间</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${affected.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
-          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           const immune = playerItemsClient(state, p.id).gasMask;
           const immuneTag = immune ? `<span class="pill-tag green" style="margin-left:6px;">😷 防毒面具免疫</span>` : "";
           return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
@@ -543,7 +550,7 @@ function renderHungerSection(container, sec, draft, state, deltas) {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
           const delta = settlementHealthDelta(deltas, pid);
-          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           const locked = sec.committed || t.exempt;
           const waterFoodCells = t.exempt
             ? `<td colspan="2" style="color:#8b9482;">在 B204 餐厅</td>`
@@ -579,7 +586,7 @@ function renderRocketSection(container, sec, draft, deltas) {
         <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
         <tbody>${players.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
-          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">目标房间内无玩家，或本轮未设置目标。</div>`}
@@ -624,7 +631,7 @@ function renderItemsSection(container, sec, draft, deltas) {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
           const delta = settlementHealthDelta(deltas, pid);
-          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           const variance = [];
           if (t.pill) variance.push("💊生命+2");
           if (t.wine && t.wineResult === 6) variance.push("🍷生命+2");
@@ -673,7 +680,7 @@ function renderRevivalSection(container, sec, draft, deltas) {
           const p = draft.working.find((pp) => pp.id === Number(pid));
           if (!p) return "";
           const delta = settlementHealthDelta(deltas, pid);
-          const { before, after } = settlementBeforeAfter(sec.committed, p.health, delta);
+          const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
           const revived = sec.committed && sec.applied && sec.applied.revivedIds.includes(Number(pid));
           return `<tr><td>${settlementPlayerLabel(pid)}</td><td>+${absorbed}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${revived ? "✅ 复活" : sec.committed ? "仍为暗影" : "-"}</td></tr>`;
         }).join("")}</tbody>

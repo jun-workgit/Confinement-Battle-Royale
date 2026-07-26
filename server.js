@@ -1043,7 +1043,19 @@ wss.on("connection", (ws) => {
         if (!draft || draft.round !== state.round) return;
         const sec = draft.sections[msg.section];
         if (!sec || sec.committed) return;
+        // Snapshot every player's health right before/after this section's
+        // own effect, so admin.html can always show THIS section's true
+        // before/after -- draft.working keeps getting mutated by whichever
+        // sections commit after this one, so recomputing "before" later from
+        // the (by-then-further-reduced) live health would retroactively
+        // shift what an already-committed section displays.
+        const healthBefore = {};
+        for (const p of draft.working) healthBefore[p.id] = p.health;
         sec.applied = commitSectionEffect(msg.section, sec.data, draft.working, state);
+        const healthAfter = {};
+        for (const p of draft.working) healthAfter[p.id] = p.health;
+        sec.applied.healthBefore = healthBefore;
+        sec.applied.healthAfter = healthAfter;
         sec.committed = true;
         break;
       }
