@@ -340,12 +340,13 @@ Every item card requires 1 Capacity to carry. Except during the Free Phase, a pl
 每轮将按照以下流程，公示本轮行动信息，并对相关玩家的生命值进行秘密结算。
 结算阶段公知信息：
 1.手术室是否进行手术；
-2.哪些房间发生战斗、乱斗或暗影与人相遇事件；
-3.哪个楼层成为"毒气"楼层；
-4.第二轮开始，为抵抗饥饿，玩家需上交1水1粮道具卡。若只上交其一，则会扣除1点生命值，都未上交则会扣除2点生命值。
-5.火箭筒袭击了哪个房间；
-6.是否有玩家要使用药片、酒、肾上腺素道具卡改变自身状态；
-7.哪些暗影玩家复活？
+2.哪些房间发生战斗、乱斗；
+3.哪些房间发生暗影与人相遇事件；
+4.哪个楼层成为"毒气"楼层；
+5.第二轮开始，为抵抗饥饿，玩家需上交1水1粮道具卡。若只上交其一，则会扣除1点生命值，都未上交则会扣除2点生命值。
+6.火箭筒袭击了哪个房间；
+7.是否有玩家要使用药片、酒、肾上腺素道具卡改变自身状态；
+8.哪些暗影玩家复活？
 最后，将公示所有玩家的当前生命值。
 
 若在任意结算流程中，有玩家的生命值归0，则会公示其成为"暗影"。"暗影"玩家需立即上交所有道具卡，该道具卡将会自动进入停尸间。"暗影"玩家下一轮将会从停尸间出发继续游戏。`,
@@ -363,12 +364,13 @@ Once a player finishes their action, they move to the meeting room to wait, and 
 Each round follows this process: publicly announce this round's action information, then secretly settle the relevant players' Health.
 Publicly known information at Settlement:
 1. Whether surgery took place in the Surgery Room (手术室);
-2. Which rooms had combat, a brawl, or a Shadow (暗影) encountering a living player;
-3. Which floor became the "Poison Gas (毒气)" floor;
-4. From round 2 onward, to fend off hunger, players must hand in 1 Water + 1 Food item card. Handing in only one of them costs 1 Health; handing in neither costs 2 Health;
-5. Which room the Rocket Launcher struck;
-6. Whether any player used a Pill, Wine, or Adrenaline (肾上腺素) item card to change their state;
-7. Which Shadow players revived.
+2. Which rooms had combat or a brawl;
+3. Which rooms had a Shadow (暗影) encountering a living player;
+4. Which floor became the "Poison Gas (毒气)" floor;
+5. From round 2 onward, to fend off hunger, players must hand in 1 Water + 1 Food item card. Handing in only one of them costs 1 Health; handing in neither costs 2 Health;
+6. Which room the Rocket Launcher struck;
+7. Whether any player used a Pill, Wine, or Adrenaline (肾上腺素) item card to change their state;
+8. Which Shadow players revived.
 Finally, every player's current Health is publicly announced.
 
 If any player's Health drops to 0 during any settlement step, they are publicly announced as a "Shadow (暗影)". A Shadow player must immediately hand over all their item cards, which are automatically sent to the Morgue (停尸间). A Shadow player continues the game from the Morgue starting next round.`,

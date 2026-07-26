@@ -261,14 +261,39 @@ function computeRoomEvents(working) {
   for (const room of Object.keys(byRoom)) {
     const group = byRoom[room];
     const living = group.filter((p) => p.health > 0);
-    const shadows = group.filter((p) => p.health <= 0);
-    if (shadows.length && living.length) {
-      events.push({ room, kind: "shadow", playerIds: group.map((p) => p.id) });
-    }
     if (living.length === 2 && room !== "B202") {
       events.push({ room, kind: "single", playerIds: living.map((p) => p.id) });
     } else if (living.length > 2) {
       events.push({ room, kind: "multi", playerIds: living.map((p) => p.id) });
+    }
+  }
+  return events;
+}
+
+// Shadow-meet events are their own pass, computed AFTER this round's fights
+// (see the "combat" vs "shadow_meet" settlement sections) -- a player killed
+// by THIS round's own brawl doesn't instantly start draining life the same
+// round, so "is this a Shadow" is checked against state.players (their real,
+// still-untouched-until-finishSettlement health as of the start of the
+// round), never against `working`. Whether they still count as "living" to
+// be drained FROM, on the other hand, DOES need the current (possibly
+// combat-reduced) working health.
+function computeShadowMeetEvents(working, state) {
+  const byRoom = {};
+  for (const p of working) {
+    if (!p.room) continue;
+    (byRoom[p.room] = byRoom[p.room] || []).push(p);
+  }
+  const events = [];
+  for (const room of Object.keys(byRoom)) {
+    const group = byRoom[room];
+    const shadows = group.filter((p) => {
+      const real = state.players.find((pp) => pp.id === p.id);
+      return real && real.health <= 0;
+    });
+    const living = group.filter((p) => p.health > 0);
+    if (shadows.length && living.length) {
+      events.push({ room, kind: "shadow", playerIds: [...shadows, ...living].map((p) => p.id) });
     }
   }
   return events;
@@ -313,6 +338,10 @@ function computeSectionDefault(section, working, state) {
       return { outcome, playerIds: occupants.map((p) => p.id) };
     }
     case "combat": {
+      // Single duels and brawls only -- shadow-meet events are their own
+      // section (see "shadow_meet" below), resolved AFTER this one, so a
+      // Shadow's absorption is based on who's actually still alive once
+      // this round's fights are done, not who merely started the room alive.
       const data = { events: computeRoomEvents(working) };
       // Round 0 (still Prep, before Round 1) has no real combat yet — this
       // section instead carries spawn-room fights (players who secretly
@@ -320,6 +349,15 @@ function computeSectionDefault(section, working, state) {
       // above) plus one-time role-assignment bonuses like 驯兽师's.
       if (state.round === 0) data.roleBonuses = computeRoleAssignBonuses(working);
       return data;
+    }
+    case "shadow_meet": {
+      // Computed fresh from CURRENT working (refreshed after "combat" commits
+      // or undoes -- see admin:settlementCommitSection/UndoSection), so a
+      // player killed in this round's brawl does NOT yet count as an extra
+      // Shadow here (that starts next round); they simply stop counting as
+      // one of the living players a pre-existing Shadow absorbs from. See
+      // computeShadowMeetEvents for exactly how that distinction is drawn.
+      return { events: computeShadowMeetEvents(working, state) };
     }
     case "poison": {
       const tally = {};
@@ -464,33 +502,34 @@ function commitSectionEffect(section, data, working, state) {
           const dmg = maxPower - power;
           if (dmg > 0) bump(id, -dmg);
         }
-      } else if (ev.kind === "shadow") {
-        // "若'暗影'玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1
-        // 点生命值" -- one drain, two sides: living players lose 1 per
-        // Shadow present, and each Shadow gains 1 per living player present
-        // (this IS the absorption revival is based on, applied here rather
-        // than in "revival" so it's visible in this accordion too).
-        // 暗影使者's "暗影共鸣": "免疫暗影吸取生命" excludes them from the
-        // drained side entirely (their presence still counts toward each
-        // Shadow's own gain below -- only THEIR health is protected, not
-        // the Shadow's take); "每当其他暗影吸取生命，你恢复1点生命" is
-        // tallied here (every event, across the whole map) and paid out
-        // once after the full events loop below.
-        const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
-        const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
-        const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
-        for (const p of drainedLiving) {
-          bump(p.id, -shadowCount);
-        }
-        for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
-          bump(p.id, livingCount);
-          shadowEnvoyResonance += livingCount;
-        }
       }
     }
-    // 暗影使者's own recovery is a single lump sum after every shadow-meet
-    // event this round has been tallied, not per-event -- and only pays out
-    // if they're alive right now (a dead 暗影使者 has no "存活状态").
+  } else if (section === "shadow_meet") {
+    // "若'暗影'玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1点
+    // 生命值" -- one drain, two sides: living players lose 1 per Shadow
+    // present, and each Shadow gains 1 per living player present (this IS
+    // the absorption revival is based on, applied here rather than in
+    // "revival" so it's visible in this accordion too). Runs AFTER "combat"
+    // (see computeShadowMeetEvents), so this reflects who actually survived
+    // this round's fights, not who merely started the room alive.
+    // 暗影使者's "暗影共鸣": "免疫暗影吸取生命" excludes them from the
+    // drained side entirely (their presence still counts toward each
+    // Shadow's own gain below -- only THEIR health is protected, not the
+    // Shadow's take); "每当其他暗影吸取生命，你恢复1点生命" is tallied here
+    // (every event, across the whole map) and paid out once after the full
+    // events loop below.
+    for (const ev of data.events) {
+      const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
+      const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
+      const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
+      for (const p of drainedLiving) {
+        bump(p.id, -shadowCount);
+      }
+      for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
+        bump(p.id, livingCount);
+        shadowEnvoyResonance += livingCount;
+      }
+    }
     if (shadowEnvoyResonance > 0) {
       const envoy = working.find((p) => p.roleId === "shadow_envoy" && p.health > 0);
       if (envoy) bump(envoy.id, shadowEnvoyResonance);
@@ -643,21 +682,37 @@ function undoSectionEffect(section, applied, working, state) {
   }
 }
 
+// "shadow_meet" and "revival" both describe the CONSEQUENCES of whatever
+// other sections have committed so far (see their computeSectionDefault
+// cases) rather than independent inputs, so every time anything else
+// commits or gets undone, both need refreshing against the now-current
+// working state -- shadow_meet first, since revival's own absorbedThisRound
+// reads off whatever shadow_meet just did.
+function refreshDependentSections(draft, state, justChangedSection) {
+  if (justChangedSection !== "shadow_meet" && !draft.sections.shadow_meet.committed) {
+    draft.sections.shadow_meet.data = computeSectionDefault("shadow_meet", draft.working, state);
+  }
+  if (justChangedSection !== "revival" && !draft.sections.revival.committed) {
+    draft.sections.revival.data = computeSectionDefault("revival", draft.working, state);
+  }
+}
+
 function startSettlementDraft(state) {
   if (state.settlementDraft && state.settlementDraft.round === state.round) return; // already in progress — resume as-is
   const snapshot = draftPlayerSnapshot(state.players);
   const working = draftPlayerSnapshot(state.players);
   const sections = {};
-  for (const name of ["surgery", "combat", "poison", "hunger", "rocket", "items", "revival"]) {
+  for (const name of ["surgery", "combat", "shadow_meet", "poison", "hunger", "rocket", "items", "revival"]) {
     sections[name] = { committed: false, data: computeSectionDefault(name, working, state), applied: null };
   }
-  // Round 0 (still Prep, before Round 1) has nothing yet for surgery/poison/
-  // hunger/rocket/items/revival to describe — their computed defaults are
-  // already a strict no-op this early (e.g. hunger only bites from Round 2,
-  // B202 isn't a valid spawn room). Auto-commit them so admin only ever has
-  // to look at "combat" (spawn-room fights + role-assignment bonuses).
+  // Round 0 (still Prep, before Round 1) has nothing yet for surgery/
+  // shadow_meet/poison/hunger/rocket/items/revival to describe -- their
+  // computed defaults are already a strict no-op this early (e.g. hunger
+  // only bites from Round 2, B202 isn't a valid spawn room, and nobody can
+  // possibly be a Shadow yet). Auto-commit them so admin only ever has to
+  // look at "combat" (spawn-room fights + role-assignment bonuses).
   if (state.round === 0) {
-    for (const name of ["surgery", "poison", "hunger", "rocket", "items", "revival"]) {
+    for (const name of ["surgery", "shadow_meet", "poison", "hunger", "rocket", "items", "revival"]) {
       const sec = sections[name];
       sec.applied = commitSectionEffect(name, sec.data, working, state);
       sec.committed = true;
@@ -686,7 +741,7 @@ function buildSettlementLogEntries(state, draft) {
   const runningHealth = {};
   for (const wp of draft.baseline) runningHealth[wp.id] = wp.health;
 
-  for (const key of ["surgery", "combat", "poison", "hunger", "rocket", "items", "revival"]) {
+  for (const key of ["surgery", "combat", "shadow_meet", "poison", "hunger", "rocket", "items", "revival"]) {
     const sec = draft.sections[key];
     if (!sec.applied) continue;
 
@@ -742,6 +797,10 @@ function buildSettlementLogEntries(state, draft) {
         const autoLoss = !!(sec.applied.extra && sec.applied.extra.autoLoss && sec.applied.extra.autoLoss[id]);
         const roleBonus = sec.data.roleBonuses && sec.data.roleBonuses.find((rb) => rb.playerId === id);
         detail = { kind: ev ? ev.kind : null, autoLoss, roleBonus: roleBonus ? { roleId: roleBonus.roleId, stats: roleBonus.stats } : null };
+        room = ev ? ev.room : null;
+      } else if (key === "shadow_meet") {
+        const ev = sec.data.events.find((e) => e.playerIds.includes(id));
+        detail = { kind: "shadow" };
         room = ev ? ev.room : null;
       } else if (key === "poison") {
         const wp = draft.working.find((p) => p.id === id);
@@ -1150,17 +1209,7 @@ wss.on("connection", (ws) => {
         sec.applied.healthBefore = healthBefore;
         sec.applied.healthAfter = healthAfter;
         sec.committed = true;
-        // Every section's `data` is computed once, at draft creation, from
-        // whatever working looked like before anything was committed --
-        // "revival" is the one section whose own data (absorbedThisRound)
-        // is actually ABOUT the health changes other sections just made (see
-        // computeSectionDefault's "revival" case), so it needs refreshing
-        // against the current working state after every other commit, or it
-        // would keep showing 0 absorption forever, however many sections
-        // (particularly "combat") have already run.
-        if (msg.section !== "revival" && !draft.sections.revival.committed) {
-          draft.sections.revival.data = computeSectionDefault("revival", draft.working, state);
-        }
+        refreshDependentSections(draft, state, msg.section);
         break;
       }
       case "admin:settlementUndoSection": {
@@ -1171,12 +1220,7 @@ wss.on("connection", (ws) => {
         undoSectionEffect(msg.section, sec.applied, draft.working, state);
         sec.applied = null;
         sec.committed = false;
-        // Same reasoning as the commit handler -- undoing e.g. "combat"
-        // reverses the Shadow absorption "revival" was showing, so its data
-        // needs refreshing against working's now-reverted state too.
-        if (msg.section !== "revival" && !draft.sections.revival.committed) {
-          draft.sections.revival.data = computeSectionDefault("revival", draft.working, state);
-        }
+        refreshDependentSections(draft, state, msg.section);
         break;
       }
       // Resets this section back to its freshly-auto-computed state — undoes

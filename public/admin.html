@@ -49,12 +49,13 @@ let inSettlement = false;
 let expandedSettlementSection = "surgery";
 const SETTLEMENT_SECTIONS = [
   { key: "surgery", title: "1. 手术室是否进行手术" },
-  { key: "combat", title: "2. 哪些房间发生战斗、乱斗或暗影与人相遇事件" },
-  { key: "poison", title: "3. 哪个楼层成为“毒气”楼层" },
-  { key: "hunger", title: "4. 水粮上交情况" },
-  { key: "rocket", title: "5. 火箭筒袭击了哪个房间" },
-  { key: "items", title: "6. 道具卡使用情况" },
-  { key: "revival", title: "7. 哪些暗影玩家复活" },
+  { key: "combat", title: "2. 哪些房间发生战斗、乱斗" },
+  { key: "shadow_meet", title: "3. 哪些房间发生暗影与人相遇事件" },
+  { key: "poison", title: "4. 哪个楼层成为“毒气”楼层" },
+  { key: "hunger", title: "5. 水粮上交情况" },
+  { key: "rocket", title: "6. 火箭筒袭击了哪个房间" },
+  { key: "items", title: "7. 道具卡使用情况" },
+  { key: "revival", title: "8. 哪些暗影玩家复活" },
 ];
 
 function startEdit(state) {
@@ -338,17 +339,19 @@ function previewSectionDeltas(key, sec, draft, state) {
           const dmg = maxPower - power;
           if (dmg > 0) bump(id, -dmg);
         }
-      } else if (ev.kind === "shadow") {
-        const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
-        const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
-        const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
-        for (const p of drainedLiving) {
-          bump(p.id, -shadowCount);
-        }
-        for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
-          bump(p.id, livingCount);
-          shadowEnvoyResonance += livingCount;
-        }
+      }
+    }
+  } else if (key === "shadow_meet") {
+    for (const ev of sec.data.events) {
+      const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
+      const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
+      const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
+      for (const p of drainedLiving) {
+        bump(p.id, -shadowCount);
+      }
+      for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
+        bump(p.id, livingCount);
+        shadowEnvoyResonance += livingCount;
       }
     }
     if (shadowEnvoyResonance > 0) {
@@ -514,8 +517,11 @@ function roleBonusesHtml(roleBonuses) {
 }
 
 function renderCombatSection(container, sec, draft, deltas, state) {
-  const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
-  const kindIcon = { single: "⚔️", multi: "⚔️", shadow: "👻" };
+  // Shadow-meet events are their own section now (see renderShadowMeetSection
+  // below, resolved AFTER this one) -- sec.data.events here is single/multi
+  // duels only.
+  const kindLabel = { single: "单挑", multi: "乱斗" };
+  const kindIcon = { single: "⚔️", multi: "⚔️" };
   container.innerHTML = `
     ${roleBonusesHtml(sec.data.roleBonuses)}
     ${sec.data.events.length ? sec.data.events.map((ev) => {
@@ -549,10 +555,36 @@ function renderCombatSection(container, sec, draft, deltas, state) {
             }).join("")}</tbody>
           </table></div>
         </div>`;
-    }).join("") : `<div style="color:#8b9482;font-size:13px;">本轮没有房间发生战斗、乱斗或暗影相遇事件。</div>`}
+    }).join("") : `<div style="color:#8b9482;font-size:13px;">本轮没有房间发生战斗、乱斗事件。</div>`}
     ${settlementFooterHtml(sec)}
   `;
   wireSettlementFooter(container, "combat");
+}
+
+// Runs AFTER "combat" (see server.js's computeShadowMeetEvents) -- who's
+// "living" here already reflects anyone just killed by this round's own
+// fights, so a Shadow only absorbs from whoever actually survived them.
+function renderShadowMeetSection(container, sec, draft, deltas, state) {
+  container.innerHTML = `
+    ${sec.data.events.length ? sec.data.events.map((ev) => {
+      const players = ev.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
+      return `
+        <div class="settlement-event-group">
+          <div style="font-weight:700;margin-bottom:6px;">${getRoomLabel(ev.room)} — 暗影相遇</div>
+          <div style="overflow-x:auto;"><table class="stats-table">
+            <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+            <tbody>${players.map((p) => {
+              const delta = settlementHealthDelta(deltas, p.id);
+              const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
+              const envoyTag = p.roleId === "shadow_envoy" && p.health > 0 ? `<span class="pill-tag green" style="margin-left:6px;">🌙 暗影共鸣免疫</span>` : "";
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${envoyTag}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "👻", sec.committed)}</td></tr>`;
+            }).join("")}</tbody>
+          </table></div>
+        </div>`;
+    }).join("") : `<div style="color:#8b9482;font-size:13px;">本轮没有房间发生暗影与人相遇事件。</div>`}
+    ${settlementFooterHtml(sec)}
+  `;
+  wireSettlementFooter(container, "shadow_meet");
 }
 
 function renderPoisonSection(container, sec, draft, deltas, state) {
@@ -739,6 +771,7 @@ function renderSettlementSectionBody(container, key, draft, state) {
   const deltas = sec.committed && sec.applied ? sec.applied : previewSectionDeltas(key, sec, draft, state);
   if (key === "surgery") renderSurgerySection(container, sec, draft, deltas);
   else if (key === "combat") renderCombatSection(container, sec, draft, deltas, state);
+  else if (key === "shadow_meet") renderShadowMeetSection(container, sec, draft, deltas, state);
   else if (key === "poison") renderPoisonSection(container, sec, draft, deltas, state);
   else if (key === "hunger") renderHungerSection(container, sec, draft, state, deltas);
   else if (key === "rocket") renderRocketSection(container, sec, draft, deltas);
@@ -758,7 +791,7 @@ function renderSettlementTab(tabBody, state) {
   tabBody.innerHTML = `
     <div class="card">
       <div style="font-weight:700;font-size:16px;margin-bottom:4px;">结算阶段 · 第 ${draft.round} 回合</div>
-      <div style="font-size:13px;color:#8b9482;margin-bottom:16px;">逐项提交后仅管理员可见，全部 7 项提交后点击上方"结算完成"才会一次性生效给所有玩家。</div>
+      <div style="font-size:13px;color:#8b9482;margin-bottom:16px;">逐项提交后仅管理员可见，全部 8 项提交后点击上方"结算完成"才会一次性生效给所有玩家。</div>
       <div class="settlement-accordion">
         ${SETTLEMENT_SECTIONS.map((s) => {
           const sec = draft.sections[s.key];
@@ -1019,7 +1052,7 @@ function renderDashboard(state) {
       const draftState = state.settlementDraft;
       const allDone = draftState && Object.values(draftState.sections).every((s) => s.committed);
       if (!allDone) {
-        alert("请先完成并提交全部 7 个结算项目，才能结束本轮结算。");
+        alert("请先完成并提交全部 8 个结算项目，才能结束本轮结算。");
         return;
       }
       socket.send({ type: "admin:finishSettlement", password: adminPassword });
@@ -1607,13 +1640,14 @@ function playerLogSourceLabel(entry) {
         parts.push(`职业加成 · ${role ? role.name : entry.detail.roleBonus.roleId}`);
       }
       if (entry.detail.kind) {
-        const kindLabel = { single: "单挑", multi: "乱斗", shadow: "暗影相遇" };
+        const kindLabel = { single: "单挑", multi: "乱斗" };
         let base = `战斗 · ${kindLabel[entry.detail.kind] || entry.detail.kind}`;
         if (entry.detail.autoLoss) base += "（对方持枪，己方无枪，直接判负）";
         parts.push(base);
       }
       return parts.join("；") || "战斗";
     }
+    case "shadow_meet": return "暗影相遇";
     case "poison": return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}${entry.detail.gasMaskImmune ? "（😷 防毒面具免疫，未受伤害）" : ""}`;
     case "hunger": {
       const missing = [];
