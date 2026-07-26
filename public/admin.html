@@ -374,14 +374,17 @@ function previewSectionDeltas(key, sec, draft, state) {
   } else if (key === "revival") {
     // Absorption itself already happened via "combat"'s shadow-meet event --
     // this section only finalizes anyone whose health has now reached >=0,
-    // clamping the ambiguous "exactly 0" case up to 1 (its own explicit
-    // delta, mirroring server.js, so the preview matches what commit will
-    // actually record).
+    // reviving them with the TOTAL absorbed since death (current health +
+    // reviveThreshold, since death always starts them at exactly
+    // -reviveThreshold -- see server.js's commitSectionEffect for why that
+    // sum is always the true running total), mirrored here so the preview
+    // matches what commit will actually record.
+    const threshold = state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD;
     for (const [playerId] of Object.entries(sec.data.absorbedThisRound)) {
       const id = Number(playerId);
       const p = find(id);
       if (p && p.health >= 0) {
-        const clamped = Math.max(1, p.health);
+        const clamped = Math.max(1, p.health + threshold);
         if (clamped !== p.health) bump(id, clamped - p.health);
       }
     }

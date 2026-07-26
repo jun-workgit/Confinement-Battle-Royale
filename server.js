@@ -542,21 +542,26 @@ function commitSectionEffect(section, data, working, state) {
 
   // Revival is the one section where crossing the health>=0 threshold is a
   // state transition, not just a number: whoever's working health reaches
-  // >=0 this round revives with health equal to whatever they actually
-  // absorbed (at least 1, since 0 still reads as a shadow everywhere else).
-  // The clamp-up-to-1 adjustment (only ever matters when they land exactly
-  // on 0) is folded into healthDeltas so it's part of the recorded delta --
-  // otherwise undo/logs would only reverse the absorption and silently
-  // leave the +1 clamp behind, permanently drifting their health by 1 every
-  // commit/undo cycle.
+  // >=0 this round revives with health equal to the TOTAL amount they've
+  // absorbed since dying (at least 1, since 0 still reads as a shadow
+  // everywhere else) -- not just "however close to 0 the debt math landed".
+  // Death always sets health to exactly -reviveThreshold (see
+  // admin:finishSettlement), and a Shadow's health only ever moves via
+  // absorption while dead, so (current health + reviveThreshold) IS that
+  // running total, however many rounds and however many living players it
+  // took. The adjustment is folded into healthDeltas so it's part of the
+  // recorded delta -- otherwise undo/logs would only reverse the absorption
+  // and silently leave the rest behind, permanently drifting their health
+  // every commit/undo cycle.
   const revivedIds = [];
   if (section === "revival") {
+    const threshold = state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD;
     for (const [playerId] of Object.entries(data.absorbedThisRound)) {
       const id = Number(playerId);
       const p = find(id);
       if (p && p.health >= 0) {
         const beforeClamp = p.health;
-        p.health = Math.max(1, p.health);
+        p.health = Math.max(1, p.health + threshold);
         if (p.health !== beforeClamp) healthDeltas[id] = (healthDeltas[id] || 0) + (p.health - beforeClamp);
         revivedIds.push(id);
       }
