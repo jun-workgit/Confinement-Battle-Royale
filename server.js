@@ -408,6 +408,7 @@ function commitSectionEffect(section, data, working, state) {
   let combatAutoLoss = null;
   let combatRoleBonusDeltas = null;
   let poisonGasMaskImmune = null;
+  let shadowEnvoyResonance = 0; // 暗影使者's "暗影共鸣" -- see the "shadow" event branch below
 
   if (section === "surgery") {
     if (data.outcome === "success") {
@@ -469,15 +470,30 @@ function commitSectionEffect(section, data, working, state) {
         // Shadow present, and each Shadow gains 1 per living player present
         // (this IS the absorption revival is based on, applied here rather
         // than in "revival" so it's visible in this accordion too).
+        // 暗影使者's "暗影共鸣": "免疫暗影吸取生命" excludes them from the
+        // drained side entirely (their presence still counts toward each
+        // Shadow's own gain below -- only THEIR health is protected, not
+        // the Shadow's take); "每当其他暗影吸取生命，你恢复1点生命" is
+        // tallied here (every event, across the whole map) and paid out
+        // once after the full events loop below.
         const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
         const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
-        for (const p of ev.playerIds.map(find).filter((p) => p && p.health > 0)) {
+        const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
+        for (const p of drainedLiving) {
           bump(p.id, -shadowCount);
         }
         for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
           bump(p.id, livingCount);
+          shadowEnvoyResonance += livingCount;
         }
       }
+    }
+    // 暗影使者's own recovery is a single lump sum after every shadow-meet
+    // event this round has been tallied, not per-event -- and only pays out
+    // if they're alive right now (a dead 暗影使者 has no "存活状态").
+    if (shadowEnvoyResonance > 0) {
+      const envoy = working.find((p) => p.roleId === "shadow_envoy" && p.health > 0);
+      if (envoy) bump(envoy.id, shadowEnvoyResonance);
     }
   } else if (section === "poison") {
     const damage = poisonDamageForRound(state.poisonDamageTable, state.round);
@@ -527,18 +543,30 @@ function commitSectionEffect(section, data, working, state) {
   // happened via "combat"'s shadow-meet event; see the health>=0 finalize
   // block below instead.
 
+  const newlyDead = [];
   for (const [id, dh] of Object.entries(healthDeltas)) {
     const p = find(Number(id));
     if (!p) continue;
     const realPlayer = state.players.find((pp) => pp.id === Number(id));
     // 肾上腺素's "next round can't die" protection -- floors this section's
-    // damage at 1 health for whoever used it last round. The recorded delta
-    // is corrected to the actual (possibly clamped) change so undo/logs stay
-    // accurate regardless of what the raw math would have done.
+    // damage at 1 health for whoever used it last round, taking precedence
+    // over the death clamp below (they cannot die at all this round). The
+    // recorded delta is corrected to the actual (possibly clamped) change so
+    // undo/logs stay accurate regardless of what the raw math would have done.
     const protectedNow = realPlayer && realPlayer.adrenalineProtectedRound === state.round;
     const before = p.health;
     let after = before + dh;
-    if (protectedNow && after < 1) after = 1;
+    if (protectedNow) {
+      if (after < 1) after = 1;
+    } else if (before > 0 && after <= 0) {
+      // Crossing from alive to dead THIS section -- forced to exactly
+      // -reviveThreshold immediately (not deferred to admin:finishSettlement
+      // like before), so every accordion's own 结算后 already shows the
+      // real debt value instead of whatever raw arithmetic the damage added
+      // up to (e.g. never "1 -> -1", always "1 -> -2" for a threshold of 2).
+      after = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
+      newlyDead.push(Number(id));
+    }
     p.health = after;
     healthDeltas[id] = after - before;
   }
@@ -595,6 +623,7 @@ function commitSectionEffect(section, data, working, state) {
   if (section === "combat" && combatAutoLoss && Object.keys(combatAutoLoss).length) {
     extra.autoLoss = combatAutoLoss;
   }
+  if (newlyDead.length) extra.newlyDead = newlyDead;
 
   return { healthDeltas, statDeltas, revivedIds, extra };
 }
@@ -1186,14 +1215,13 @@ wss.on("connection", (ws) => {
         for (const wp of draft.working) {
           const p = state.players.find((pp) => pp.id === wp.id);
           if (!p) continue;
-          // Just became a Shadow (暗影) this round -- their settled Health is
-          // forced to exactly -reviveThreshold (not whatever the raw combined
-          // damage added up to), so revival always needs exactly that much
-          // absorption regardless of how much overkill damage they took, and
-          // they move straight to the Morgue (B701 停尸间). The per-section
-          // audit log above still shows the real (unclamped) numbers, since
-          // this override is a rules step that happens after the fact, not a
-          // correction to what actually happened each section.
+          // Whichever section actually pushed them below 0 already clamped
+          // wp.health to exactly -reviveThreshold immediately (see the
+          // healthDeltas-apply loop in commitSectionEffect) -- this is now
+          // just a defensive re-assert of that same value, plus the one
+          // thing that's still finishSettlement-only: moving them to the
+          // Morgue (B701 停尸间), since mid-settlement sections may still
+          // need their real room (e.g. a rocket target check).
           if (p.health > 0 && wp.health <= 0) {
             p.health = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
             p.room = "B701";
