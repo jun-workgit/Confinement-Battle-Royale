@@ -507,12 +507,14 @@ function renderCombatSection(container, sec, draft, deltas, state) {
 }
 
 function renderPoisonSection(container, sec, draft, deltas, state) {
-  const floors = sec.data.floors;
+  const floors = sec.data.floors; // all currently-active poison floors -- this is what deals damage below
+  const newFloors = sec.data.newFloors || [];
   const affected = draft.working.filter((p) => p.health > 0 && floors.includes(roomFloorClient(p.room)));
   const tallyEntries = Object.entries(sec.data.tally);
   container.innerHTML = `
     <div style="margin-bottom:8px;font-size:14px;">投票结果：${tallyEntries.length ? tallyEntries.map(([f, c]) => `${f} 楼（${c} 票）`).join("，") : "本轮无人投票"}</div>
-    <div style="margin-bottom:12px;font-size:14px;">本轮"毒气"楼层：<b>${floors.length ? floors.join("、") + " 楼" : "无"}</b></div>
+    <div style="margin-bottom:4px;font-size:14px;">本轮新增"毒气"楼层：<b>${newFloors.length ? newFloors.join("、") + " 楼" : "无"}</b></div>
+    <div style="margin-bottom:12px;font-size:14px;">本轮受"毒气"影响楼层（含此前已中毒，不会消散）：<b>${floors.length ? floors.join("、") + " 楼" : "无"}</b></div>
     ${affected.length ? `
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>房间</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
@@ -1120,6 +1122,27 @@ function renderMeepleTray(tray, state) {
 
 // Pointer Events (not native HTML5 drag-and-drop) so this works with touch on
 // phones/tablets, not just mouse.
+// Styled replacement for a native alert() -- a brief top-center toast that
+// fades itself out, used for admin actions the server would otherwise just
+// silently reject (nothing else in this app surfaces those any other way).
+function showAdminToast(message) {
+  let stack = document.getElementById("admin-toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.id = "admin-toast-stack";
+    stack.className = "admin-toast-stack";
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement("div");
+  toast.className = "admin-toast";
+  toast.textContent = message;
+  stack.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add("leaving");
+    toast.addEventListener("animationend", () => toast.remove(), { once: true });
+  }, 2600);
+}
+
 function attachMeepleDrag(el, state) {
   el.classList.add("draggable");
   el.addEventListener("pointerdown", (e) => {
@@ -1174,7 +1197,12 @@ function attachMeepleDrag(el, state) {
       if (target && target.kind === "room") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: target.room, password: adminPassword });
       } else if (target && target.kind === "floor") {
-        socket.send({ type: "admin:setFloorVote", playerId, floor: target.floor, password: adminPassword });
+        const votingPlayer = state.players.find((p) => p.id === playerId);
+        if (votingPlayer && votingPlayer.health <= 0) {
+          showAdminToast(`玩家 ${playerId} 已成为暗影，无法参与毒气投票`);
+        } else {
+          socket.send({ type: "admin:setFloorVote", playerId, floor: target.floor, password: adminPassword });
+        }
       } else if (target && target.kind === "tray") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: null, password: adminPassword });
       }

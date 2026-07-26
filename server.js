@@ -318,8 +318,15 @@ function computeSectionDefault(section, working, state) {
       }
       const counts = Object.values(tally);
       const max = counts.length ? Math.max(...counts) : 0;
-      const floors = max > 0 ? Object.keys(tally).filter((f) => tally[f] === max) : [];
-      return { floors, tally };
+      const newFloors = max > 0 ? Object.keys(tally).filter((f) => tally[f] === max) : [];
+      // "毒气" never dissipates -- every floor poisoned in an earlier round
+      // keeps dealing damage every round after, on top of whichever floor(s)
+      // this round's vote newly adds. `floors` (all currently-active poison
+      // floors) is what actually deals damage below; `newFloors` is kept
+      // separately just so the accordion can show what THIS round's vote
+      // picked, distinct from floors that were already poisoned coming in.
+      const floors = [...new Set([...state.poisonFloors, ...newFloors])];
+      return { floors, newFloors, tally };
     }
     case "hunger": {
       const toggles = {};
@@ -521,7 +528,9 @@ function commitSectionEffect(section, data, working, state) {
   const extra = {};
   if (section === "poison") {
     extra.previousPoisonFloors = [...state.poisonFloors];
-    state.poisonFloors = [...new Set([...state.poisonFloors, ...data.floors])];
+    // data.floors is already the full cumulative set (see
+    // computeSectionDefault's "poison" case) -- no further union needed.
+    state.poisonFloors = [...data.floors];
   }
   if (section === "combat" && combatAutoLoss && Object.keys(combatAutoLoss).length) {
     extra.autoLoss = combatAutoLoss;
@@ -957,6 +966,7 @@ wss.on("connection", (ws) => {
         const playerId = Math.round(Number(msg.playerId));
         const player = state.players.find((p) => p.id === playerId);
         if (!player) return;
+        if (player.health <= 0) return; // a Shadow (暗影) doesn't get to vote on poison gas
         const votes = state.floorVotes[playerId] || [];
         if (msg.action === "remove") {
           if (!FLOOR_IDS.has(msg.floor)) return;
