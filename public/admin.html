@@ -222,6 +222,14 @@ function roomFloorClient(roomId) {
   return "1";
 }
 
+// Mirrors server.js's isRoomPoisoned() -- B501 spans two floor bands on the
+// map (see MULTI_FLOOR_ROOMS in map-data.js), so it only counts as poisoned
+// once every floor it spans is.
+function isRoomPoisonedClient(roomId, poisonedFloors) {
+  const floors = MULTI_FLOOR_ROOMS[roomId] || [roomFloorClient(roomId)];
+  return floors.length > 0 && floors.every((f) => f && poisonedFloors.includes(f));
+}
+
 function settlementPlayerLabel(id) {
   return `玩家 ${id}`;
 }
@@ -346,7 +354,7 @@ function previewSectionDeltas(key, sec, draft, state) {
       if (p.health <= 0) continue;
       const realPlayer = state.players.find((pp) => pp.id === p.id);
       if (realPlayer && realPlayer.revivedProtectedRound === state.round) continue;
-      if (sec.data.floors.includes(roomFloorClient(p.room)) && !playerItemsClient(state, p.id).gasMask) bump(p.id, -damage);
+      if (isRoomPoisonedClient(p.room, sec.data.floors) && !playerItemsClient(state, p.id).gasMask) bump(p.id, -damage);
     }
   } else if (key === "hunger") {
     if (state.round >= 2) {
@@ -536,7 +544,7 @@ function renderCombatSection(container, sec, draft, deltas, state) {
 function renderPoisonSection(container, sec, draft, deltas, state) {
   const floors = sec.data.floors; // all currently-active poison floors -- this is what deals damage below
   const newFloors = sec.data.newFloors || [];
-  const affected = draft.working.filter((p) => p.health > 0 && floors.includes(roomFloorClient(p.room)));
+  const affected = draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors));
   const tallyEntries = Object.entries(sec.data.tally);
   container.innerHTML = `
     <div style="margin-bottom:8px;font-size:14px;">投票结果：${tallyEntries.length ? tallyEntries.map(([f, c]) => `${f} 楼（${c} 票）`).join("，") : "本轮无人投票"}</div>
@@ -1592,7 +1600,7 @@ function playerLogSourceLabel(entry) {
       }
       return parts.join("；") || "战斗";
     }
-    case "poison": return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}`;
+    case "poison": return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}${entry.detail.gasMaskImmune ? "（😷 防毒面具免疫，未受伤害）" : ""}`;
     case "hunger": {
       const missing = [];
       if (entry.detail.missingWater) missing.push("缺水");

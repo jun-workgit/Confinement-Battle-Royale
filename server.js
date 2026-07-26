@@ -4,7 +4,7 @@ const http = require("http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const {
-  FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, DEFAULT_REVIVE_THRESHOLD,
+  FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, DEFAULT_REVIVE_THRESHOLD, MULTI_FLOOR_ROOMS,
   UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun,
 } = require("./public/map-data.js");
 const { ROLE_ID_SET, ROLE_SKILL_LIMITS, ROLE_ASSIGN_BONUSES } = require("./public/roles-data.js");
@@ -218,6 +218,15 @@ function roomFloor(roomId) {
   return "1"; // 101, 102, 103, 104
 }
 
+// Most rooms sit wholly within one floor band, so "poisoned" just means
+// their one floor is poisoned. A room in MULTI_FLOOR_ROOMS (currently only
+// B501) only counts as poisoned once EVERY floor it spans is -- players can
+// otherwise retreat to whichever half of the room isn't gassed.
+function isRoomPoisoned(roomId, poisonedFloors) {
+  const floors = MULTI_FLOOR_ROOMS[roomId] || [roomFloor(roomId)];
+  return floors.length > 0 && floors.every((f) => f && poisonedFloors.includes(f));
+}
+
 // Items live on the real state.players (not the settlement draft) since
 // admin doesn't edit inventory mid-settlement -- combat/poison math just
 // reads them directly by id.
@@ -398,6 +407,7 @@ function commitSectionEffect(section, data, working, state) {
   const find = (id) => working.find((p) => p.id === id);
   let combatAutoLoss = null;
   let combatRoleBonusDeltas = null;
+  let poisonGasMaskImmune = null;
 
   if (section === "surgery") {
     if (data.outcome === "success") {
@@ -471,6 +481,7 @@ function commitSectionEffect(section, data, working, state) {
     }
   } else if (section === "poison") {
     const damage = poisonDamageForRound(state.poisonDamageTable, state.round);
+    poisonGasMaskImmune = [];
     for (const p of working) {
       if (p.health <= 0) continue;
       // 11's 防毒面具 (gas mask) holder is immune to poison-gas damage entirely
@@ -478,7 +489,12 @@ function commitSectionEffect(section, data, working, state) {
       const realPlayer = state.players.find((pp) => pp.id === p.id);
       const justRevived = realPlayer && realPlayer.revivedProtectedRound === state.round;
       if (justRevived) continue;
-      if (data.floors.includes(roomFloor(p.room)) && !playerItems(state, p.id).gasMask) bump(p.id, -damage);
+      if (!isRoomPoisoned(p.room, data.floors)) continue;
+      if (playerItems(state, p.id).gasMask) {
+        poisonGasMaskImmune.push(p.id); // took no damage, but admin still wants a log record of why
+        continue;
+      }
+      bump(p.id, -damage);
     }
   } else if (section === "hunger") {
     if (state.round >= 2) {
@@ -574,6 +590,7 @@ function commitSectionEffect(section, data, working, state) {
     // data.floors is already the full cumulative set (see
     // computeSectionDefault's "poison" case) -- no further union needed.
     state.poisonFloors = [...data.floors];
+    if (poisonGasMaskImmune && poisonGasMaskImmune.length) extra.gasMaskImmune = poisonGasMaskImmune;
   }
   if (section === "combat" && combatAutoLoss && Object.keys(combatAutoLoss).length) {
     extra.autoLoss = combatAutoLoss;
@@ -672,12 +689,17 @@ function buildSettlementLogEntries(state, draft) {
     }
 
     const { healthDeltas, statDeltas, revivedIds } = sec.applied;
-    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {})]);
+    const gasMaskImmuneIds = (key === "poison" && sec.applied.extra && sec.applied.extra.gasMaskImmune) || [];
+    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {}), ...gasMaskImmuneIds.map(String)]);
     for (const idStr of ids) {
       const id = Number(idStr);
       const hDelta = (healthDeltas && healthDeltas[id]) || 0;
       const sDelta = statDeltas && statDeltas[id];
-      if (!hDelta && !sDelta) continue; // no real effect on this player — nothing to log
+      const gasMaskImmune = gasMaskImmuneIds.includes(id);
+      // 0 delta is normally "nothing happened, don't log it" -- except gas
+      // mask immunity, which admin explicitly wants recorded even though it
+      // has no numeric effect (it's the reason there ISN'T one).
+      if (!hDelta && !sDelta && !gasMaskImmune) continue;
       const before = runningHealth[id];
       const after = before + hDelta;
       runningHealth[id] = after;
@@ -695,7 +717,7 @@ function buildSettlementLogEntries(state, draft) {
       } else if (key === "poison") {
         const wp = draft.working.find((p) => p.id === id);
         room = wp ? wp.room : null;
-        detail = { floor: room ? roomFloor(room) : null };
+        detail = { floor: room ? roomFloor(room) : null, gasMaskImmune };
       } else if (key === "hunger") {
         const t = sec.data.toggles[id];
         detail = { missingWater: t ? !t.water : false, missingFood: t ? !t.food : false };

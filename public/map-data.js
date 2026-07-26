@@ -223,6 +223,14 @@ const ROOMS = ROOMS_RAW.map((r) => ({ ...r, label: ROOM_LABELS[r.id] || r.id }))
 const TRANSIT_ROOM_IDS = ["Bridge", "Tunnel"];
 const STOPPABLE_ROOM_IDS = [...new Set(ROOMS.map((r) => r.id))].filter((id) => !TRANSIT_ROOM_IDS.includes(id));
 
+// B501 (大仓库) is drawn on the map spanning two floor levels (its room box
+// covers essentially all of B4 and B5) rather than sitting wholly within
+// one band like every other room. Players there can retreat to whichever
+// half isn't gassed, so for poison purposes it should only count as
+// "in a poisoned room" once EVERY floor it spans is poisoned — see
+// isRoomPoisoned() in server.js/admin.html, both of which key off this.
+const MULTI_FLOOR_ROOMS = { B501: ["B4", "B5"] };
+
 const STAT_DEFS = [
   { id: "power", label: "武力值", labelEn: "Power (武力)", valuePrefix: "武力: ", valuePrefixEn: "Power: ", icon: "💪" },
   { id: "speed", label: "速度值", labelEn: "Speed (速度)", valuePrefix: "剩余步数: ", valuePrefixEn: "Steps Left: ", icon: "🏃" },
@@ -810,7 +818,7 @@ function weaponBadgesHtml(items) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    FLOORS, ROOMS, ROOM_LABELS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, TRANSIT_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, DEFAULT_REVIVE_THRESHOLD, meepleColor,
+    FLOORS, ROOMS, ROOM_LABELS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, TRANSIT_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, DEFAULT_REVIVE_THRESHOLD, MULTI_FLOOR_ROOMS, meepleColor,
     ITEM_DEFS, UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun, weaponBadgesHtml,
   };
 }
