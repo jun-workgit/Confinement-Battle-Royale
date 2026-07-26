@@ -773,6 +773,16 @@ function renderSetup(state) {
         </table>
         <button class="btn secondary" id="add-round-btn" style="margin-top:10px;font-size:12px;padding:6px 14px;">+ 添加回合</button>
       </div>
+      <div class="card" style="width:280px;max-width:100%;">
+        <div style="font-weight:700;font-size:16px;margin-bottom:4px;">暗影复活设置</div>
+        <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
+          暗影玩家累计吸取满此生命值后复活；死亡瞬间生命值也会被设为其负值。仅可在创建游戏前修改。
+        </div>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#c9ccd1;">
+          复活所需吸取生命值
+          <input type="number" id="revive-threshold-input" min="1" value="${state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD}">
+        </label>
+      </div>
       <div class="card" style="display:flex;flex-direction:column;gap:16px;width:360px;max-width:100%;">
         <div style="font-weight:700;font-size:16px;">创建游戏</div>
         <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#c9ccd1;">
@@ -830,6 +840,11 @@ function renderSetup(state) {
   panel.querySelector("#add-round-btn").addEventListener("click", () => {
     const maxRound = table.reduce((m, r) => Math.max(m, r.round), 0);
     sendTable([...table.map((r) => ({ ...r })), { round: maxRound + 1, damage: 0 }]);
+  });
+
+  panel.querySelector("#revive-threshold-input").addEventListener("change", (e) => {
+    const n = Math.max(1, Math.round(Number(e.target.value) || 1));
+    socket.send({ type: "admin:setReviveThreshold", threshold: n, password: adminPassword });
   });
 
   const playerCountInput = panel.querySelector("#player-count");

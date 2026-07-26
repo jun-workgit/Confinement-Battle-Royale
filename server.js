@@ -4,7 +4,7 @@ const http = require("http");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const {
-  FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE,
+  FLOORS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, DEFAULT_REVIVE_THRESHOLD,
   UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun,
 } = require("./public/map-data.js");
 const { ROLE_ID_SET, ROLE_SKILL_LIMITS, ROLE_ASSIGN_BONUSES } = require("./public/roles-data.js");
@@ -33,6 +33,12 @@ function defaultState() {
     round: 0,
     poisonFloors: [],
     poisonDamageTable: DEFAULT_POISON_DAMAGE_TABLE.map((r) => ({ ...r })),
+    // How much Health a Shadow must absorb (cumulative) before reviving --
+    // admin-editable during setup, like the poison damage table. Also what
+    // a newly-dead player's Health gets forced to (as -reviveThreshold),
+    // regardless of how much overkill damage they actually took -- see
+    // admin:finishSettlement.
+    reviveThreshold: DEFAULT_REVIVE_THRESHOLD,
     // Optional per-game role assignment — off by default. `selectedRoles` is
     // the fixed pool (one entry per player, chosen before createGame);
     // `rolesVisibleToPlayers` controls only whether index.html shows a
@@ -781,6 +787,7 @@ wss.on("connection", (ws) => {
           round: 0,
           poisonFloors: [],
           poisonDamageTable: state.poisonDamageTable,
+          reviveThreshold: state.reviveThreshold,
           rolesEnabled: state.rolesEnabled,
           selectedRoles: state.selectedRoles,
           rolesVisibleToPlayers: state.rolesVisibleToPlayers,
@@ -869,6 +876,13 @@ wss.on("connection", (ws) => {
         const clean = clampPoisonDamageTable(msg.table);
         if (!clean) return;
         state.poisonDamageTable = clean;
+        break;
+      }
+      case "admin:setReviveThreshold": {
+        if (state.phase !== "setup") return;
+        const n = Math.round(Number(msg.threshold));
+        if (!Number.isFinite(n) || n < 1) return;
+        state.reviveThreshold = n;
         break;
       }
       case "admin:endGame": {
@@ -1079,7 +1093,20 @@ wss.on("connection", (ws) => {
         for (const wp of draft.working) {
           const p = state.players.find((pp) => pp.id === wp.id);
           if (!p) continue;
-          p.health = wp.health;
+          // Just became a Shadow (暗影) this round -- their settled Health is
+          // forced to exactly -reviveThreshold (not whatever the raw combined
+          // damage added up to), so revival always needs exactly that much
+          // absorption regardless of how much overkill damage they took, and
+          // they move straight to the Morgue (B701 停尸间). The per-section
+          // audit log above still shows the real (unclamped) numbers, since
+          // this override is a rules step that happens after the fact, not a
+          // correction to what actually happened each section.
+          if (p.health > 0 && wp.health <= 0) {
+            p.health = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
+            p.room = "B701";
+          } else {
+            p.health = wp.health;
+          }
           p.stats = { ...wp.stats };
         }
         // 肾上腺素 used THIS round protects the player during the NEXT one --

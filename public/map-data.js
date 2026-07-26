@@ -256,6 +256,11 @@ const DEFAULT_POISON_DAMAGE_TABLE = [
   { round: 6, damage: 4 },
 ];
 
+// How much Health a Shadow (暗影) must absorb (cumulative, from sharing a
+// room with living players) before reviving. Admin-editable during setup,
+// like the poison damage table above.
+const DEFAULT_REVIVE_THRESHOLD = 2;
+
 // Shared row markup for the poison damage table, used by the small public
 // corner box and the larger dedicated tab views alike. `lang` defaults to
 // Chinese so public/admin callers are unaffected.
@@ -364,8 +369,8 @@ If any player's Health drops to 0 during any settlement step, they are publicly 
     id: "shadow",
     title: "(四) 暗影机制",
     titleEn: "(4) Shadow (暗影) Mechanic",
-    text: `"暗影"初始生命值为0，没有负重和武力，只会继承"死亡"时的速度，可不需楼梯上下楼，进入房间后无法使用房间功能和抽取道具卡，无法参与"毒气"投票。当然，也不计入房间人数，不参与战斗或乱斗，不受"毒气"伤害，不需上交水粮。若"暗影"玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1点生命值。当暗影玩家吸取累计大于等于2点生命值后，他将在当轮结算阶段最后复活，下一轮从复活房间继续游戏，基因面板恢复至生前状态，复活后的第一轮依然不受"毒气"伤害，不需上交水粮。`,
-    textEn: `A "Shadow" starts with 0 Health, has no Capacity or Power, and only inherits the Speed they had at the moment of "death" (死亡). A Shadow doesn't need stairs to move between floors, cannot use room functions or draw item cards upon entering a room, and cannot vote on "Poison Gas (毒气)". A Shadow also doesn't count toward room occupancy, doesn't take part in combat or brawls, is immune to poison-gas damage, and doesn't need to hand in Water/Food. If a Shadow shares a room with a living player, every living player there loses 1 Health absorbed by each Shadow present. Once a Shadow has absorbed 2 or more Health in total, they revive at the end of that round's Settlement Phase, continuing next round from the room where they revived, with their gene panel restored to its pre-death state. In the first round after reviving, they are still immune to poison-gas damage and don't need to hand in Water/Food.`,
+    text: `"暗影"初始生命值为0，没有负重和武力，只会继承"死亡"时的速度，可不需楼梯上下楼，进入房间后无法使用房间功能和抽取道具卡，无法参与"毒气"投票。当然，也不计入房间人数，不参与战斗或乱斗，不受"毒气"伤害，不需上交水粮。若"暗影"玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1点生命值。当暗影玩家吸取累计大于等于{{REVIVE_THRESHOLD}}点生命值后，他将在当轮结算阶段最后复活，下一轮从复活房间继续游戏，基因面板恢复至生前状态，复活后的第一轮依然不受"毒气"伤害，不需上交水粮。`,
+    textEn: `A "Shadow" starts with 0 Health, has no Capacity or Power, and only inherits the Speed they had at the moment of "death" (死亡). A Shadow doesn't need stairs to move between floors, cannot use room functions or draw item cards upon entering a room, and cannot vote on "Poison Gas (毒气)". A Shadow also doesn't count toward room occupancy, doesn't take part in combat or brawls, is immune to poison-gas damage, and doesn't need to hand in Water/Food. If a Shadow shares a room with a living player, every living player there loses 1 Health absorbed by each Shadow present. Once a Shadow has absorbed {{REVIVE_THRESHOLD}} or more Health in total, they revive at the end of that round's Settlement Phase, continuing next round from the room where they revived, with their gene panel restored to its pre-death state. In the first round after reviving, they are still immune to poison-gas damage and don't need to hand in Water/Food.`,
   },
   {
     id: "victory",
@@ -543,6 +548,7 @@ function renderGameRules(container, state, lang, opts) {
   const table = state && state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
   const totalRounds = table.length ? Math.max(...table.map((r) => r.round)) : 6;
   const poisonSchedule = en ? formatPoisonScheduleTextEn(table) : formatPoisonScheduleText(table);
+  const reviveThreshold = state && state.reviveThreshold ? state.reviveThreshold : DEFAULT_REVIVE_THRESHOLD;
 
   const rolesActive = !!(state && state.rolesEnabled) && !opts.hideRolesSection;
   const sections = rolesActive ? GAME_RULES_SECTIONS : GAME_RULES_SECTIONS.filter((s) => s.id !== "roles");
@@ -552,7 +558,8 @@ function renderGameRules(container, state, lang, opts) {
     ? rolesReferenceListHtml(en ? "en" : "zh", state.selectedRoles)
     : `<div class="rules-box">${(en ? current.textEn : current.text)
         .split("{{TOTAL_ROUNDS}}").join(String(totalRounds))
-        .split("{{POISON_SCHEDULE}}").join(poisonSchedule)}</div>`;
+        .split("{{POISON_SCHEDULE}}").join(poisonSchedule)
+        .split("{{REVIVE_THRESHOLD}}").join(String(reviveThreshold))}</div>`;
 
   container.innerHTML = `
     <div class="card rules-card">
@@ -803,7 +810,7 @@ function weaponBadgesHtml(items) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    FLOORS, ROOMS, ROOM_LABELS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, TRANSIT_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, meepleColor,
+    FLOORS, ROOMS, ROOM_LABELS, STAT_DEFS, STAT_POINTS_TOTAL, DEFAULT_HEALTH, SPAWN_ROOM_IDS, TRANSIT_ROOM_IDS, STOPPABLE_ROOM_IDS, DEFAULT_POISON_DAMAGE_TABLE, DEFAULT_REVIVE_THRESHOLD, meepleColor,
     ITEM_DEFS, UNIQUE_ITEM_KEYS, STACKABLE_ITEM_KEYS, defaultPlayerItems, weaponPowerBonus, hasGun, weaponBadgesHtml,
   };
 }
