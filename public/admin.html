@@ -1265,6 +1265,40 @@ function renderDashboard(state) {
     }
     renderFloorVoteBadges(poisonMapEl, state, settlementLocked);
     renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
+    // 102 (激光室)'s "pass-through" drop zone -- not part of the shared
+    // renderMap (this admin-only overlay has no place in the public/player
+    // views), positioned right next to 102 itself using the same
+    // absolute-percentage technique as .room. Marked-player badges sit just
+    // below it, same click-to-remove pattern as the floor-vote dots.
+    const mapImgWrap = poisonMapEl.querySelector(".map-img-wrap");
+    if (mapImgWrap) {
+      const laserZone = document.createElement("div");
+      laserZone.className = `laser-mark-zone${settlementLocked ? " locked" : ""}`;
+      laserZone.title = settlementLocked ? "结算阶段已锁定" : "拖动玩家图标到此处标记本轮经过 102 激光室（未停留）";
+      laserZone.style.left = "46.08%";
+      laserZone.style.top = "18.63%";
+      laserZone.style.width = "11.29%";
+      laserZone.style.height = "9.05%";
+      laserZone.textContent = "🔴 经过102";
+      mapImgWrap.appendChild(laserZone);
+
+      const markedIds = Object.keys(state.laserMarks || {}).filter((id) => state.laserMarks[id].round === state.round);
+      if (markedIds.length) {
+        const laserBadges = document.createElement("div");
+        laserBadges.className = "laser-mark-badges";
+        laserBadges.style.left = "46.08%";
+        laserBadges.style.top = "calc(18.63% + 9.05% + 2px)";
+        laserBadges.innerHTML = markedIds.map((id) => `<span class="laser-mark-dot${settlementLocked ? " locked" : ""}" data-laser-pid="${id}" title="${settlementLocked ? "结算阶段已锁定" : "点击取消该玩家本轮的102激光标记"}" style="background:${meepleColor(Number(id))};">${id}</span>`).join("");
+        mapImgWrap.appendChild(laserBadges);
+        if (!settlementLocked) {
+          laserBadges.querySelectorAll(".laser-mark-dot[data-laser-pid]").forEach((dot) => {
+            dot.addEventListener("click", () => {
+              socket.send({ type: "admin:setLaserMark", playerId: Number(dot.dataset.laserPid), action: "remove", password: adminPassword });
+            });
+          });
+        }
+      }
+    }
     renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);
     if (!settlementLocked) {
       tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => attachMeepleDrag(el, state));
@@ -1396,6 +1430,11 @@ function attachMeepleDrag(el, state) {
     function findDropTarget(x, y) {
       const under = document.elementFromPoint(x, y);
       if (!under) return null;
+      // The 102 "pass-through" zone sits right next to the room on the map
+      // but isn't a room itself -- dropping there never touches this
+      // player's actual room position, only the laser-damage mark.
+      const laserZone = under.closest(".laser-mark-zone");
+      if (laserZone) return { kind: "laser", el: laserZone };
       const room = under.closest(".room");
       if (room && !TRANSIT_ROOM_IDS.includes(room.dataset.roomId)) {
         return { kind: "room", el: room, room: room.dataset.roomId };
@@ -1429,6 +1468,14 @@ function attachMeepleDrag(el, state) {
       const target = findDropTarget(ev.clientX, ev.clientY);
       if (target && target.kind === "room") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: target.room, password: adminPassword });
+        // 102 (激光室)'s damage is a separate manual flag on top of the
+        // normal move -- always relocate them there, then ask separately
+        // whether to also mark this round's laser damage.
+        if (target.room === "102") openLaserMarkConfirmModal(playerId, "stop", state);
+      } else if (target && target.kind === "laser") {
+        // Merely passing through 102 -- no room change at all, purely a
+        // laser-damage mark (see admin:setLaserMark).
+        openLaserMarkConfirmModal(playerId, "pass", state);
       } else if (target && target.kind === "floor") {
         const votingPlayer = state.players.find((p) => p.id === playerId);
         if (votingPlayer && votingPlayer.health <= 0) {
@@ -1829,6 +1876,47 @@ function openChemistActionModal(state) {
   });
 }
 
+// 102 (激光室)'s "经过或停留...扣1点生命" isn't something this app can
+// detect on its own (it only knows a player's final room, not their real
+// walking path) -- admin manually marks it by dragging a player's token
+// onto 102 itself ("stop") or the dedicated red zone next to it ("pass"),
+// see attachMeepleDrag's onUp. A REAL, immediate health change (not
+// deferred to 结算, unlike every other pre-结算 map setting above), so it's
+// confirmed here rather than applied silently on every drop.
+function openLaserMarkConfirmModal(playerId, kind, state) {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return;
+  if (player.health <= 0) {
+    showAdminToast(`玩家 ${playerId} 已成为暗影，不再受激光室影响`);
+    return;
+  }
+  const existing = state.laserMarks && state.laserMarks[playerId];
+  if (existing && existing.round === state.round) {
+    showAdminToast(`玩家 ${playerId} 本轮已标记过 102 激光室`);
+    return;
+  }
+  const verb = kind === "stop" ? "停留在" : "经过";
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info laser-mark-modal">
+      <div class="modal-title">🔴 102 激光室</div>
+      <div style="margin:12px 0;font-size:14px;">玩家 ${playerId} 本轮${verb} 102 激光室，是否标记扣除 1 点生命？</div>
+      <div class="modal-actions">
+        <button class="btn secondary laser-mark-cancel">不标记</button>
+        <button class="btn laser-mark-confirm">标记 -1 生命</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".laser-mark-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".laser-mark-confirm").addEventListener("click", () => {
+    socket.send({ type: "admin:setLaserMark", playerId, action: "add", password: adminPassword });
+    close();
+  });
+}
+
 // Human-readable label for one playerLogs entry's source/detail — mirrors
 // the wording used in the settlement accordions themselves so admin can
 // cross-reference a log line against what they saw while settling that round.
@@ -1877,6 +1965,7 @@ function playerLogSourceLabelBase(entry) {
       return `道具卡 · ${parts.join("、") || "-"}`;
     }
     case "revival": return `暗影复活 · 吸收 ${entry.detail.absorbed}${entry.detail.revived ? "（已复活）" : "（尚未复活）"}`;
+    case "laser102": return "102 激光室 · 经过/停留（管理员标记）";
     case "manual": return "管理员手动调整";
     default: return entry.source;
   }

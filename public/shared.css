@@ -205,6 +205,32 @@ html, body {
 .floor-vote-dot.locked { cursor: not-allowed; opacity: 0.6; }
 .floor-vote-dot.locked:hover { transform: none; }
 
+/* 102 (激光室) "pass-through" drop zone (admin map, in-progress only) --
+   dragging a player token here marks this round's laser damage without
+   touching their actual room, same absolute-percentage positioning as
+   .room but styled distinctly (red dashed) so it reads as "not a room". */
+.laser-mark-zone {
+  position: absolute; box-sizing: border-box; border-radius: 4px;
+  border: 2px dashed #ff8a80; background: rgba(214,40,57,0.12);
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font-size: 11px; color: #ff8a80; padding: 2px;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.laser-mark-zone.drop-hover { background: rgba(214,40,57,0.32); border-color: #ff4d4f; }
+.laser-mark-zone.locked { opacity: 0.5; filter: grayscale(0.4); }
+.laser-mark-badges {
+  position: absolute; display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 80px;
+}
+.laser-mark-dot {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 800; color: #fff; border: 1px solid rgba(255,255,255,0.6);
+  cursor: pointer;
+}
+.laser-mark-dot:hover { transform: scale(1.25); border-color: #fff; }
+.laser-mark-dot.locked { cursor: not-allowed; opacity: 0.6; }
+.laser-mark-dot.locked:hover { transform: none; }
+
 /* Rocket Launcher target picker (admin map, in-progress only). */
 .rocket-tray {
   display: flex; align-items: center; gap: 10px; margin-bottom: 14px;

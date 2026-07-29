@@ -65,6 +65,17 @@ function defaultState() {
     // round) or { type: "reduce", room } (-2, floor of 0, for a room whose
     // floor is ALREADY poisoned coming into this round).
     chemistAction: null,
+    // 102 (激光室)'s "经过或停留在该房间将立即扣除1点生命值" isn't something
+    // this app can detect on its own (it only knows a player's final room
+    // for the round, not their real physical walking path) -- admin marks
+    // it manually by dragging a player's token onto 102 itself (stopped
+    // there) or the dedicated red zone next to it on the map (merely passed
+    // through, final room unaffected). Unlike every other pre-结算 map
+    // setting above, this is a REAL, immediate health change (see
+    // admin:setLaserMark) rather than something deferred to 结算 -- { round,
+    // healthBefore, roomBefore } per marked player id, kept only so
+    // "cancel" can undo it exactly; cleared every round the same way.
+    laserMarks: {},
     // Settlement-phase draft — null outside of settlement. See
     // startSettlementDraft() for the shape. `working` holds player
     // health/stats as sections get committed; this is broadcast to every
@@ -1038,6 +1049,7 @@ wss.on("connection", (ws) => {
           floorVotes: {},
           rocketTargetRoom: null,
           chemistAction: null,
+          laserMarks: {},
           settlementDraft: null,
           playerLogs: {},
           timer: state.timer,
@@ -1187,6 +1199,7 @@ wss.on("connection", (ws) => {
               state.floorVotes = {};
               state.rocketTargetRoom = null;
               state.chemistAction = null;
+              state.laserMarks = {};
             }
             state.round = newRound;
           }
@@ -1300,6 +1313,62 @@ wss.on("connection", (ws) => {
           if (!ROOM_IDS.has(msg.action.room)) return;
           if (!isRoomPoisoned(msg.action.room, state.poisonFloors)) return; // must already be poisoned
           state.chemistAction = { type: "reduce", room: msg.action.room };
+        } else {
+          return;
+        }
+        break;
+      }
+      // Admin manually flags 102 (激光室)'s "经过或停留...扣1点生命" -- a
+      // REAL, immediate health change (not deferred to 结算, unlike every
+      // other pre-结算 map setting above), since the app has no way to
+      // detect this on its own. "add" applies the same death-clamp/Morgue
+      // relocation as any other source of death (see commitSectionEffect's
+      // clamp loop) so it stays consistent whether the fatal -1 happens here
+      // or during 结算; "remove" is an exact undo using what was recorded at
+      // mark time, plus dropping the log entry it created (as if it never
+      // happened, not "corrected").
+      case "admin:setLaserMark": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        const playerId = Math.round(Number(msg.playerId));
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player) return;
+        if (msg.action === "add") {
+          const existing = state.laserMarks[playerId];
+          if (existing && existing.round === state.round) return; // already marked this round
+          if (player.health <= 0) return; // a Shadow doesn't take this
+          const healthBefore = player.health;
+          const roomBefore = player.room;
+          let after = healthBefore - 1;
+          let becameShadow = false;
+          if (after <= 0) {
+            after = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
+            becameShadow = true;
+          }
+          player.health = after;
+          if (becameShadow) player.room = "B701";
+          state.laserMarks[playerId] = { round: state.round, healthBefore, roomBefore };
+          addPlayerLog(state, playerId, {
+            round: state.round,
+            source: "laser102",
+            detail: {},
+            room: "102",
+            healthBefore,
+            healthAfter: after,
+            healthDelta: after - healthBefore,
+            statDeltas: null,
+          });
+        } else if (msg.action === "remove") {
+          const mark = state.laserMarks[playerId];
+          if (!mark || mark.round !== state.round) return;
+          player.health = mark.healthBefore;
+          player.room = mark.roomBefore;
+          delete state.laserMarks[playerId];
+          const logs = state.playerLogs[String(playerId)];
+          if (logs) {
+            const idx = logs.findIndex((e) => e.round === state.round && e.source === "laser102");
+            if (idx !== -1) logs.splice(idx, 1);
+          }
         } else {
           return;
         }
@@ -1433,6 +1502,7 @@ wss.on("connection", (ws) => {
         state.floorVotes = {};
         state.rocketTargetRoom = null;
         state.chemistAction = null;
+        state.laserMarks = {};
         // Round 0's settlement is what actually starts the game -- there's
         // no separate admin:startGame anymore, so finishing it here both
         // applies its one-off effects and flips Prep -> in_progress, right
