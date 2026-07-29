@@ -305,6 +305,7 @@ function previewSectionDeltas(key, sec, draft, state) {
   const find = (id) => draft.working.find((p) => p.id === id);
   let shadowEnvoyResonance = 0;
   const adrenalineSaved = new Set();
+  const chemistAdjusted = new Map();
 
   if (key === "surgery") {
     if (sec.data.outcome === "success") {
@@ -360,12 +361,28 @@ function previewSectionDeltas(key, sec, draft, state) {
       if (envoy) bump(envoy.id, shadowEnvoyResonance);
     }
   } else if (key === "poison") {
-    const damage = computePoisonDamageClient(state);
+    const baseDamage = computePoisonDamageClient(state);
+    const chemistAction = sec.data.chemistAction;
     for (const p of draft.working) {
       if (p.health <= 0) continue;
       const realPlayer = state.players.find((pp) => pp.id === p.id);
       if (realPlayer && realPlayer.revivedProtectedRound === state.round) continue;
-      if (isRoomPoisonedClient(p.room, sec.data.floors) && !playerItemsClient(state, p.id).gasMask) bump(p.id, -damage);
+      if (!isRoomPoisonedClient(p.room, sec.data.floors) || playerItemsClient(state, p.id).gasMask) continue;
+      // Mirrors server.js's commitSectionEffect exactly -- see there for why
+      // "reduce" only needs a room match while "boost" also re-checks the
+      // floor is still in this round's newFloors.
+      let damage = baseDamage;
+      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room) {
+        damage = Math.max(0, damage - 2);
+        chemistAdjusted.set(p.id, -2);
+      } else if (chemistAction && chemistAction.type === "boost" && (sec.data.newFloors || []).includes(chemistAction.floor)) {
+        const roomFloors = MULTI_FLOOR_ROOMS[p.room] || [roomFloorClient(p.room)];
+        if (roomFloors.includes(chemistAction.floor)) {
+          damage = damage + 2;
+          chemistAdjusted.set(p.id, 2);
+        }
+      }
+      if (damage > 0) bump(p.id, -damage);
     }
   } else if (key === "hunger") {
     if (state.round >= 2) {
@@ -432,7 +449,7 @@ function previewSectionDeltas(key, sec, draft, state) {
     healthDeltas[idStr] = after - before;
   }
 
-  return { healthDeltas, statDeltas, revivedIds: [], adrenalineSaved };
+  return { healthDeltas, statDeltas, revivedIds: [], adrenalineSaved, chemistAdjusted };
 }
 
 function settlementHealthDelta(deltas, playerId) {
@@ -481,6 +498,27 @@ function settlementAdrenalineTagHtml(sec, deltas, playerId) {
   return settlementAdrenalineSaved(sec, deltas, playerId)
     ? `<span class="pill-tag amber" style="margin-left:6px;">💉 肾上腺素保护${sec.committed ? "" : "（预计）"}</span>`
     : "";
+}
+
+// 化学家's "毒性调和" adjustment for this player in the poison section, if
+// any -- committed sections read the server's own recorded
+// extra.chemistAdjusted (exact); an uncommitted section falls back to the
+// Map previewSectionDeltas just computed via the mirrored logic.
+function settlementChemistAdjust(sec, deltas, playerId) {
+  if (sec.committed) {
+    const m = sec.applied && sec.applied.extra && sec.applied.extra.chemistAdjusted;
+    return m && m[playerId] !== undefined ? m[playerId] : null;
+  }
+  return deltas.chemistAdjusted && deltas.chemistAdjusted.has(playerId) ? deltas.chemistAdjusted.get(playerId) : null;
+}
+
+function settlementChemistTagHtml(sec, deltas, playerId) {
+  const adjust = settlementChemistAdjust(sec, deltas, playerId);
+  if (adjust == null) return "";
+  const suffix = sec.committed ? "" : "（预计）";
+  return adjust > 0
+    ? `<span class="pill-tag red" style="margin-left:6px;">🧪 化学家增强+2${suffix}</span>`
+    : `<span class="pill-tag green" style="margin-left:6px;">🧪 化学家削弱-2${suffix}</span>`;
 }
 
 function settlementHealthText(value) {
@@ -626,15 +664,75 @@ function renderShadowMeetSection(container, sec, draft, deltas, state) {
   wireSettlementFooter(container, "shadow_meet");
 }
 
+// 化学家's "毒性调和" (1 of 2, admin picks while reviewing this section) --
+// only shown at all when the role is actually in play this game. "削弱"
+// targets can only be rooms that are actually poisoned AND occupied right
+// now (picking an empty room would have nothing to reduce); "增强" targets
+// can only be a floor that just became poisoned THIS round, per the role's
+// own card text -- an already-established poisoned floor from an earlier
+// round isn't eligible for the boost.
+function chemistActionControlHtml(sec, state, affectedRooms, newFloors) {
+  const chemist = state.players.find((p) => p.roleId === "chemist");
+  if (!state.rolesEnabled || !chemist) return "";
+  const action = sec.data.chemistAction;
+  const disabled = sec.committed;
+  const type = action ? action.type : "";
+  const targetOptionsHtml = type === "reduce"
+    ? (affectedRooms.length ? affectedRooms.map((r) => `<option value="${r}" ${action && action.room === r ? "selected" : ""}>${getRoomLabel(r)}</option>`).join("") : `<option value="">无已中毒且有人的房间</option>`)
+    : type === "boost"
+    ? (newFloors.length ? newFloors.map((f) => `<option value="${f}" ${action && action.floor === f ? "selected" : ""}>${f} 楼</option>`).join("") : `<option value="">本轮无新增毒气楼层</option>`)
+    : "";
+  return `
+    <div class="settlement-event-group" style="margin-bottom:12px;">
+      <div style="font-weight:700;margin-bottom:6px;">🧪 化学家（玩家 ${chemist.id}）· 毒性调和（2选1，可不使用）</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        <select id="chemist-action-type" ${disabled ? "disabled" : ""}>
+          <option value="" ${!type ? "selected" : ""}>本轮不使用</option>
+          <option value="reduce" ${type === "reduce" ? "selected" : ""}>削弱：指定已中毒房间本轮-2（最低为0）</option>
+          <option value="boost" ${type === "boost" ? "selected" : ""}>增强：本轮新增毒气楼层伤害+2</option>
+        </select>
+        <select id="chemist-action-target" ${disabled || !type ? "disabled" : ""} style="${type ? "" : "display:none;"}">${targetOptionsHtml}</select>
+      </div>
+    </div>`;
+}
+
+function wireChemistActionControl(container, sec, draft, state) {
+  const typeSel = container.querySelector("#chemist-action-type");
+  if (!typeSel) return;
+  const send = (chemistAction) => {
+    socket.send({ type: "admin:settlementSetSectionData", section: "poison", data: { chemistAction }, password: adminPassword });
+  };
+  typeSel.addEventListener("change", () => {
+    const type = typeSel.value;
+    if (!type) { send(null); return; }
+    const floors = sec.data.floors;
+    const affectedRooms = [...new Set(draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors)).map((p) => p.room))];
+    const newFloors = sec.data.newFloors || [];
+    if (type === "reduce") send(affectedRooms.length ? { type: "reduce", room: affectedRooms[0] } : null);
+    else send(newFloors.length ? { type: "boost", floor: newFloors[0] } : null);
+  });
+  const targetSel = container.querySelector("#chemist-action-target");
+  if (targetSel) {
+    targetSel.addEventListener("change", () => {
+      const type = typeSel.value;
+      const val = targetSel.value;
+      if (!val) return;
+      send(type === "reduce" ? { type: "reduce", room: val } : { type: "boost", floor: val });
+    });
+  }
+}
+
 function renderPoisonSection(container, sec, draft, deltas, state) {
   const floors = sec.data.floors; // all currently-active poison floors -- this is what deals damage below
   const newFloors = sec.data.newFloors || [];
   const affected = draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors));
+  const affectedRooms = [...new Set(affected.map((p) => p.room))];
   const tallyEntries = Object.entries(sec.data.tally);
   container.innerHTML = `
     <div style="margin-bottom:8px;font-size:14px;">投票结果：${tallyEntries.length ? tallyEntries.map(([f, c]) => `${f} 楼（${c} 票）`).join("，") : "本轮无人投票"}</div>
     <div style="margin-bottom:4px;font-size:14px;">本轮新增"毒气"楼层：<b>${newFloors.length ? newFloors.join("、") + " 楼" : "无"}</b></div>
     <div style="margin-bottom:12px;font-size:14px;">本轮受"毒气"影响楼层（含此前已中毒，不会消散）：<b>${floors.length ? floors.join("、") + " 楼" : "无"}</b></div>
+    ${chemistActionControlHtml(sec, state, affectedRooms, newFloors)}
     ${affected.length ? `
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>房间</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
@@ -645,11 +743,12 @@ function renderPoisonSection(container, sec, draft, deltas, state) {
           const justRevived = state.players.find((pp) => pp.id === p.id)?.revivedProtectedRound === state.round;
           const immuneTag = gasMask ? `<span class="pill-tag green" style="margin-left:6px;">😷 防毒面具免疫</span>`
             : justRevived ? `<span class="pill-tag green" style="margin-left:6px;">✨ 复活首轮免疫</span>` : "";
-          return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementChemistTagHtml(sec, deltas, p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
     ${settlementFooterHtml(sec)}
   `;
+  wireChemistActionControl(container, sec, draft, state);
   wireSettlementFooter(container, "poison");
 }
 
@@ -1714,7 +1813,10 @@ function playerLogSourceLabelBase(entry) {
       return parts.join("；") || "战斗";
     }
     case "shadow_meet": return "暗影相遇";
-    case "poison": return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}${entry.detail.gasMaskImmune ? "（😷 防毒面具免疫，未受伤害）" : ""}`;
+    case "poison": {
+      const chemistText = entry.detail.chemistAdjust > 0 ? "（🧪 化学家增强+2）" : entry.detail.chemistAdjust < 0 ? "（🧪 化学家削弱-2）" : "";
+      return `毒气 · ${entry.detail.floor ? entry.detail.floor + " 楼" : "-"}${entry.detail.gasMaskImmune ? "（😷 防毒面具免疫，未受伤害）" : ""}${chemistText}`;
+    }
     case "hunger": {
       const missing = [];
       if (entry.detail.missingWater) missing.push("缺水");

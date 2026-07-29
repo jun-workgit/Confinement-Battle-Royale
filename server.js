@@ -386,7 +386,11 @@ function computeSectionDefault(section, working, state) {
       // separately just so the accordion can show what THIS round's vote
       // picked, distinct from floors that were already poisoned coming in.
       const floors = [...new Set([...state.poisonFloors, ...newFloors])];
-      return { floors, newFloors, tally };
+      // 化学家's "毒性调和" (1 of 2, admin picks while reviewing this
+      // section -- see commitSectionEffect below): starts unset every round
+      // (never carried over), admin fills it in via
+      // admin:settlementSetSectionData before committing.
+      return { floors, newFloors, tally, chemistAction: null };
     }
     case "hunger": {
       const toggles = {};
@@ -453,6 +457,7 @@ function commitSectionEffect(section, data, working, state) {
   let combatAutoLoss = null;
   let combatRoleBonusDeltas = null;
   let poisonGasMaskImmune = null;
+  let chemistAdjusted = null; // 化学家's "毒性调和" -- see the "poison" branch below
   let shadowEnvoyResonance = 0; // 暗影使者's "暗影共鸣" -- see the "shadow" event branch below
 
   if (section === "surgery") {
@@ -542,8 +547,10 @@ function commitSectionEffect(section, data, working, state) {
       if (envoy) bump(envoy.id, shadowEnvoyResonance);
     }
   } else if (section === "poison") {
-    const damage = poisonDamageForRound(state.poisonDamageTable, state.round);
+    const baseDamage = poisonDamageForRound(state.poisonDamageTable, state.round);
     poisonGasMaskImmune = [];
+    chemistAdjusted = {};
+    const chemistAction = data.chemistAction;
     for (const p of working) {
       if (p.health <= 0) continue;
       // 11's 防毒面具 (gas mask) holder is immune to poison-gas damage entirely
@@ -556,7 +563,25 @@ function commitSectionEffect(section, data, working, state) {
         poisonGasMaskImmune.push(p.id); // took no damage, but admin still wants a log record of why
         continue;
       }
-      bump(p.id, -damage);
+      // 化学家's "毒性调和" (1 of 2 -- see computeSectionDefault's "poison"
+      // case): either designate an ALREADY-poisoned room for -2 this round
+      // (floor of 0), or a floor that just became poisoned THIS round (must
+      // be in data.newFloors, not one poisoned in an earlier round) for +2.
+      // Re-validated here (not just trusted from the UI) since a room's
+      // eligibility can shift between when admin picked it and when this
+      // section actually commits.
+      let damage = baseDamage;
+      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room) {
+        damage = Math.max(0, damage - 2);
+        chemistAdjusted[p.id] = -2;
+      } else if (chemistAction && chemistAction.type === "boost" && (data.newFloors || []).includes(chemistAction.floor)) {
+        const roomFloors = MULTI_FLOOR_ROOMS[p.room] || [roomFloor(p.room)];
+        if (roomFloors.includes(chemistAction.floor)) {
+          damage = damage + 2;
+          chemistAdjusted[p.id] = 2;
+        }
+      }
+      if (damage > 0) bump(p.id, -damage);
     }
   } else if (section === "hunger") {
     if (state.round >= 2) {
@@ -671,6 +696,7 @@ function commitSectionEffect(section, data, working, state) {
     // computeSectionDefault's "poison" case) -- no further union needed.
     state.poisonFloors = [...data.floors];
     if (poisonGasMaskImmune && poisonGasMaskImmune.length) extra.gasMaskImmune = poisonGasMaskImmune;
+    if (chemistAdjusted && Object.keys(chemistAdjusted).length) extra.chemistAdjusted = chemistAdjusted;
   }
   if (section === "combat" && combatAutoLoss && Object.keys(combatAutoLoss).length) {
     extra.autoLoss = combatAutoLoss;
@@ -816,17 +842,21 @@ function buildSettlementLogEntries(state, draft) {
     // poison -- tracked generically (see commitSectionEffect's clamp loop)
     // so admin can tell exactly which section it fired in, every time.
     const adrenalineSavedIds = (sec.applied.extra && sec.applied.extra.adrenalineSaved) || [];
-    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {}), ...gasMaskImmuneIds.map(String), ...adrenalineSavedIds.map(String)]);
+    const chemistAdjustedIds = (key === "poison" && sec.applied.extra && sec.applied.extra.chemistAdjusted) || {};
+    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {}), ...gasMaskImmuneIds.map(String), ...adrenalineSavedIds.map(String), ...Object.keys(chemistAdjustedIds)]);
     for (const idStr of ids) {
       const id = Number(idStr);
       const hDelta = (healthDeltas && healthDeltas[id]) || 0;
       const sDelta = statDeltas && statDeltas[id];
       const gasMaskImmune = gasMaskImmuneIds.includes(id);
       const adrenalineSaved = adrenalineSavedIds.includes(id);
+      const chemistAdjust = chemistAdjustedIds[id];
       // 0 delta is normally "nothing happened, don't log it" -- except gas
-      // mask immunity or an adrenaline save, which admin explicitly wants
-      // recorded even when the numeric effect alone wouldn't stand out.
-      if (!hDelta && !sDelta && !gasMaskImmune && !adrenalineSaved) continue;
+      // mask immunity, an adrenaline save, or a chemist adjustment (e.g. a
+      // -2 reduction that zeroed out otherwise-1 damage), which admin
+      // explicitly wants recorded even when the numeric effect alone
+      // wouldn't stand out.
+      if (!hDelta && !sDelta && !gasMaskImmune && !adrenalineSaved && chemistAdjust === undefined) continue;
       const before = runningHealth[id];
       const after = before + hDelta;
       runningHealth[id] = after;
@@ -848,7 +878,7 @@ function buildSettlementLogEntries(state, draft) {
       } else if (key === "poison") {
         const wp = draft.working.find((p) => p.id === id);
         room = wp ? wp.room : null;
-        detail = { floor: room ? roomFloor(room) : null, gasMaskImmune };
+        detail = { floor: room ? roomFloor(room) : null, gasMaskImmune, chemistAdjust: chemistAdjust ?? null };
       } else if (key === "hunger") {
         const t = sec.data.toggles[id];
         detail = { missingWater: t ? !t.water : false, missingFood: t ? !t.food : false };
