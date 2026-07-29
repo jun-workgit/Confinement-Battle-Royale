@@ -304,6 +304,7 @@ function previewSectionDeltas(key, sec, draft, state) {
   const bump = (id, dh) => { healthDeltas[id] = (healthDeltas[id] || 0) + dh; };
   const find = (id) => draft.working.find((p) => p.id === id);
   let shadowEnvoyResonance = 0;
+  const adrenalineSaved = new Set();
 
   if (key === "surgery") {
     if (sec.data.outcome === "success") {
@@ -423,6 +424,7 @@ function previewSectionDeltas(key, sec, draft, state) {
     const before = p.health;
     let after = before + healthDeltas[idStr];
     if (protectedNow) {
+      if (before > 0 && after <= 0) adrenalineSaved.add(id);
       if (after < 1) after = 1;
     } else if (before > 0 && after <= 0) {
       after = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
@@ -430,7 +432,7 @@ function previewSectionDeltas(key, sec, draft, state) {
     healthDeltas[idStr] = after - before;
   }
 
-  return { healthDeltas, statDeltas, revivedIds: [] };
+  return { healthDeltas, statDeltas, revivedIds: [], adrenalineSaved };
 }
 
 function settlementHealthDelta(deltas, playerId) {
@@ -462,6 +464,23 @@ function settlementDeltaText(delta, icon, committed) {
   if (!delta) return "-";
   const text = `${icon}生命${delta > 0 ? "+" : ""}${delta}`;
   return committed ? text : `<span class="settlement-preview-delta">${text}（预计）</span>`;
+}
+
+// Whether 肾上腺素 is the reason THIS section's damage stopped short of
+// killing this player -- committed sections read the server's own recorded
+// extra.adrenalineSaved (exact); an uncommitted section falls back to the
+// same Set previewSectionDeltas just computed via the mirrored clamp logic.
+function settlementAdrenalineSaved(sec, deltas, playerId) {
+  if (sec.committed) {
+    return !!(sec.applied && sec.applied.extra && sec.applied.extra.adrenalineSaved && sec.applied.extra.adrenalineSaved.includes(playerId));
+  }
+  return !!(deltas.adrenalineSaved && deltas.adrenalineSaved.has(playerId));
+}
+
+function settlementAdrenalineTagHtml(sec, deltas, playerId) {
+  return settlementAdrenalineSaved(sec, deltas, playerId)
+    ? `<span class="pill-tag amber" style="margin-left:6px;">💉 肾上腺素保护${sec.committed ? "" : "（预计）"}</span>`
+    : "";
 }
 
 function settlementHealthText(value) {
@@ -551,7 +570,7 @@ function renderCombatSection(container, sec, draft, deltas, state) {
               const powerBase = roleBonusPower ? `${p.stats.power}+${roleBonusPower}=${p.stats.power + roleBonusPower}` : `${p.stats.power}`;
               const powerCell = badges ? `${powerBase} <span style="color:#8b9482;">${badges}</span>` : powerBase;
               const autoLossTag = p.id === autoLossId ? `<span class="pill-tag red" style="margin-left:6px;">对方持枪，直接判负</span>` : "";
-              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${autoLossTag}</td><td>${powerCell}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${autoLossTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${powerCell}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
             }).join("")}</tbody>
           </table></div>
         </div>`;
@@ -586,7 +605,7 @@ function renderShadowMeetSection(container, sec, draft, deltas, state) {
               const delta = settlementHealthDelta(deltas, p.id);
               const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
               const envoyTag = p.roleId === "shadow_envoy" && p.health > 0 ? `<span class="pill-tag green" style="margin-left:6px;">🌙 暗影共鸣免疫</span>` : "";
-              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${envoyTag}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "👻", sec.committed)}</td></tr>`;
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${envoyTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "👻", sec.committed)}</td></tr>`;
             }).join("")}</tbody>
           </table></div>
         </div>`;
@@ -626,7 +645,7 @@ function renderPoisonSection(container, sec, draft, deltas, state) {
           const justRevived = state.players.find((pp) => pp.id === p.id)?.revivedProtectedRound === state.round;
           const immuneTag = gasMask ? `<span class="pill-tag green" style="margin-left:6px;">😷 防毒面具免疫</span>`
             : justRevived ? `<span class="pill-tag green" style="margin-left:6px;">✨ 复活首轮免疫</span>` : "";
-          return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
     ${settlementFooterHtml(sec)}
@@ -653,7 +672,7 @@ function renderHungerSection(container, sec, draft, state, deltas) {
             : `<td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="water"`, t.water, locked)}</td>
                <td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="food"`, t.food, locked)}</td>`;
           return `<tr>
-            <td>${settlementPlayerLabel(pid)}</td>
+            <td>${settlementPlayerLabel(pid)}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td>
             ${waterFoodCells}
             <td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🍽️", sec.committed)}</td>
           </tr>`;
@@ -683,7 +702,7 @@ function renderRocketSection(container, sec, draft, deltas) {
         <tbody>${players.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
           const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
-          return `<tr><td>${settlementPlayerLabel(p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">目标房间内无玩家，或本轮未设置目标。</div>`}
     ${settlementFooterHtml(sec)}
@@ -1664,6 +1683,11 @@ function openInventoryModal(p, state) {
 // the wording used in the settlement accordions themselves so admin can
 // cross-reference a log line against what they saw while settling that round.
 function playerLogSourceLabel(entry) {
+  const adrenalineSuffix = entry.detail.adrenalineSaved ? "（💉 肾上腺素保护，本应死亡）" : "";
+  return playerLogSourceLabelBase(entry) + adrenalineSuffix;
+}
+
+function playerLogSourceLabelBase(entry) {
   switch (entry.source) {
     case "surgery": return "手术室 · 手术成功";
     case "combat": {

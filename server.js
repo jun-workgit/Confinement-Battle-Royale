@@ -208,6 +208,13 @@ function clampHealth(v) {
 // can reverse it precisely, regardless of what other sections have done
 // since. Room-id -> floor-id: "2xx"/"Bxdd" style ids encode their floor in
 // the leading digit(s).
+//
+// Fixed 1-8 accordion order -- every section's default is computed FROM
+// `working`, which earlier sections in this order have already mutated by
+// the time a later one is (re)computed, so this list doubles as the actual
+// calculation order (see refreshUncommittedSections/cascadeUndoFrom below).
+const SETTLEMENT_SECTION_ORDER = ["surgery", "combat", "shadow_meet", "poison", "hunger", "rocket", "items", "revival"];
+
 function roomFloor(roomId) {
   if (!roomId) return null;
   if (roomId[0] === "B") {
@@ -583,6 +590,7 @@ function commitSectionEffect(section, data, working, state) {
   // block below instead.
 
   const newlyDead = [];
+  const adrenalineSaved = [];
   for (const [id, dh] of Object.entries(healthDeltas)) {
     const p = find(Number(id));
     if (!p) continue;
@@ -596,6 +604,11 @@ function commitSectionEffect(section, data, working, state) {
     const before = p.health;
     let after = before + dh;
     if (protectedNow) {
+      // Recorded every time it actually mattered (i.e. this section's own
+      // math would otherwise have killed them) so admin can see exactly
+      // which section 肾上腺素 saved them from and isn't left guessing why
+      // the number stopped short of the expected debt value.
+      if (before > 0 && after <= 0) adrenalineSaved.push(Number(id));
       if (after < 1) after = 1;
     } else if (before > 0 && after <= 0) {
       // Crossing from alive to dead THIS section -- forced to exactly
@@ -663,6 +676,7 @@ function commitSectionEffect(section, data, working, state) {
     extra.autoLoss = combatAutoLoss;
   }
   if (newlyDead.length) extra.newlyDead = newlyDead;
+  if (adrenalineSaved.length) extra.adrenalineSaved = adrenalineSaved;
 
   return { healthDeltas, statDeltas, revivedIds, extra };
 }
@@ -682,18 +696,42 @@ function undoSectionEffect(section, applied, working, state) {
   }
 }
 
-// "shadow_meet" and "revival" both describe the CONSEQUENCES of whatever
-// other sections have committed so far (see their computeSectionDefault
-// cases) rather than independent inputs, so every time anything else
-// commits or gets undone, both need refreshing against the now-current
-// working state -- shadow_meet first, since revival's own absorbedThisRound
-// reads off whatever shadow_meet just did.
-function refreshDependentSections(draft, state, justChangedSection) {
-  if (justChangedSection !== "shadow_meet" && !draft.sections.shadow_meet.committed) {
-    draft.sections.shadow_meet.data = computeSectionDefault("shadow_meet", draft.working, state);
+// Every section's default is computed FROM `working` as of right now (who's
+// still alive, what floors are poisoned, etc.) -- so any section that hasn't
+// been committed yet is, by definition, stale the moment an earlier one
+// commits or gets undone. Recomputing every uncommitted section in order
+// (not just shadow_meet/revival, which merely made this most visible) is
+// what makes a player who died in section 2 actually disappear from section
+// 4/6's toggle rows instead of still being offered water/food/item actions
+// after death. Harmless to call after a NORMAL top-to-bottom commit too,
+// since admin hasn't touched anything after the section that just committed
+// yet -- recomputing it fresh is identical to what first opening it would
+// have produced anyway.
+function refreshUncommittedSections(draft, state) {
+  for (const name of SETTLEMENT_SECTION_ORDER) {
+    const sec = draft.sections[name];
+    if (!sec.committed) sec.data = computeSectionDefault(name, draft.working, state);
   }
-  if (justChangedSection !== "revival" && !draft.sections.revival.committed) {
-    draft.sections.revival.data = computeSectionDefault("revival", draft.working, state);
+}
+
+// Undoing (or resetting) section N invalidates every section after it in
+// the fixed order too -- they were computed and committed against a
+// `working` snapshot that N's own commit has since changed (e.g. a player it
+// killed was still "alive" as far as a later section's toggles were
+// concerned). Reversed in LIFO order so each undo exactly cancels what its
+// own commit recorded, ending with `working` back to exactly where it stood
+// right before N ever committed; refreshUncommittedSections (called by
+// every handler below, after this) then recomputes N..end fresh from there.
+function cascadeUndoFrom(draft, state, sectionKey) {
+  const startIdx = SETTLEMENT_SECTION_ORDER.indexOf(sectionKey);
+  for (let i = SETTLEMENT_SECTION_ORDER.length - 1; i >= startIdx; i--) {
+    const name = SETTLEMENT_SECTION_ORDER[i];
+    const sec = draft.sections[name];
+    if (sec.committed) {
+      undoSectionEffect(name, sec.applied, draft.working, state);
+      sec.applied = null;
+      sec.committed = false;
+    }
   }
 }
 
@@ -702,7 +740,7 @@ function startSettlementDraft(state) {
   const snapshot = draftPlayerSnapshot(state.players);
   const working = draftPlayerSnapshot(state.players);
   const sections = {};
-  for (const name of ["surgery", "combat", "shadow_meet", "poison", "hunger", "rocket", "items", "revival"]) {
+  for (const name of SETTLEMENT_SECTION_ORDER) {
     sections[name] = { committed: false, data: computeSectionDefault(name, working, state), applied: null };
   }
   // Round 0 (still Prep, before Round 1) has nothing yet for surgery/
@@ -741,7 +779,7 @@ function buildSettlementLogEntries(state, draft) {
   const runningHealth = {};
   for (const wp of draft.baseline) runningHealth[wp.id] = wp.health;
 
-  for (const key of ["surgery", "combat", "shadow_meet", "poison", "hunger", "rocket", "items", "revival"]) {
+  for (const key of SETTLEMENT_SECTION_ORDER) {
     const sec = draft.sections[key];
     if (!sec.applied) continue;
 
@@ -774,16 +812,21 @@ function buildSettlementLogEntries(state, draft) {
 
     const { healthDeltas, statDeltas, revivedIds } = sec.applied;
     const gasMaskImmuneIds = (key === "poison" && sec.applied.extra && sec.applied.extra.gasMaskImmune) || [];
-    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {}), ...gasMaskImmuneIds.map(String)]);
+    // 肾上腺素 can save someone in ANY section that deals damage, not just
+    // poison -- tracked generically (see commitSectionEffect's clamp loop)
+    // so admin can tell exactly which section it fired in, every time.
+    const adrenalineSavedIds = (sec.applied.extra && sec.applied.extra.adrenalineSaved) || [];
+    const ids = new Set([...Object.keys(healthDeltas || {}), ...Object.keys(statDeltas || {}), ...gasMaskImmuneIds.map(String), ...adrenalineSavedIds.map(String)]);
     for (const idStr of ids) {
       const id = Number(idStr);
       const hDelta = (healthDeltas && healthDeltas[id]) || 0;
       const sDelta = statDeltas && statDeltas[id];
       const gasMaskImmune = gasMaskImmuneIds.includes(id);
+      const adrenalineSaved = adrenalineSavedIds.includes(id);
       // 0 delta is normally "nothing happened, don't log it" -- except gas
-      // mask immunity, which admin explicitly wants recorded even though it
-      // has no numeric effect (it's the reason there ISN'T one).
-      if (!hDelta && !sDelta && !gasMaskImmune) continue;
+      // mask immunity or an adrenaline save, which admin explicitly wants
+      // recorded even when the numeric effect alone wouldn't stand out.
+      if (!hDelta && !sDelta && !gasMaskImmune && !adrenalineSaved) continue;
       const before = runningHealth[id];
       const after = before + hDelta;
       runningHealth[id] = after;
@@ -814,6 +857,7 @@ function buildSettlementLogEntries(state, draft) {
       } else if (key === "revival") {
         detail = { absorbed: sec.data.absorbedThisRound[id], revived: revivedIds.includes(id) };
       }
+      if (adrenalineSaved) detail.adrenalineSaved = true;
 
       addPlayerLog(state, id, {
         round: draft.round,
@@ -1224,33 +1268,32 @@ wss.on("connection", (ws) => {
         sec.applied.healthBefore = healthBefore;
         sec.applied.healthAfter = healthAfter;
         sec.committed = true;
-        refreshDependentSections(draft, state, msg.section);
+        refreshUncommittedSections(draft, state);
         break;
       }
+      // Undoing section N also un-commits everything after it (see
+      // cascadeUndoFrom) -- their commits were computed against a `working`
+      // snapshot N's own commit has now changed, so leaving them standing
+      // would silently drift from what admin actually undid.
       case "admin:settlementUndoSection": {
         const draft = state.settlementDraft;
         if (!draft || draft.round !== state.round) return;
         const sec = draft.sections[msg.section];
         if (!sec || !sec.committed) return;
-        undoSectionEffect(msg.section, sec.applied, draft.working, state);
-        sec.applied = null;
-        sec.committed = false;
-        refreshDependentSections(draft, state, msg.section);
+        cascadeUndoFrom(draft, state, msg.section);
+        refreshUncommittedSections(draft, state);
         break;
       }
       // Resets this section back to its freshly-auto-computed state — undoes
-      // the commit first if needed, then discards any manual overrides.
+      // the commit first if needed (cascading through anything after it, same
+      // as settlementUndoSection), then discards any manual overrides.
       case "admin:settlementResetSection": {
         const draft = state.settlementDraft;
         if (!draft || draft.round !== state.round) return;
         const sec = draft.sections[msg.section];
         if (!sec) return;
-        if (sec.committed) {
-          undoSectionEffect(msg.section, sec.applied, draft.working, state);
-          sec.applied = null;
-          sec.committed = false;
-        }
-        sec.data = computeSectionDefault(msg.section, draft.working, state);
+        if (sec.committed) cascadeUndoFrom(draft, state, msg.section);
+        refreshUncommittedSections(draft, state);
         break;
       }
       // Discards the whole draft outright -- unlike a per-section undo, this
