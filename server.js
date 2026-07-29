@@ -1116,6 +1116,26 @@ wss.on("connection", (ws) => {
           if (!ROOM_IDS.has(msg.room)) return;
           player.room = msg.room;
         }
+        // A room correction made mid-settlement (e.g. admin flips back to
+        // 地图 to fix a placement while 结算 is already open) needs to reach
+        // the draft too -- every room-keyed section's data was computed once
+        // from `working` at draft creation, so without this it would keep
+        // silently using whatever room this player was in when 结算 was
+        // first clicked. hunger/items/poison are deliberately left alone
+        // here even though they also touch room somewhere -- recomputing
+        // them from scratch would blow away whatever admin has already
+        // manually toggled for them; surgery/combat/shadow_meet/rocket have
+        // no manual-toggle state to lose, so it's safe to just refresh them.
+        const draft = state.settlementDraft;
+        if (draft && draft.round === state.round) {
+          const wp = draft.working.find((p) => p.id === playerId);
+          if (wp) wp.room = player.room;
+          for (const name of ["surgery", "combat", "shadow_meet", "rocket"]) {
+            if (!draft.sections[name].committed) {
+              draft.sections[name].data = computeSectionDefault(name, draft.working, state);
+            }
+          }
+        }
         break;
       }
       // Admin drags a player token onto a floor-column label to record their
