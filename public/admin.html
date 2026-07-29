@@ -565,6 +565,15 @@ function renderCombatSection(container, sec, draft, deltas, state) {
 // "living" here already reflects anyone just killed by this round's own
 // fights, so a Shadow only absorbs from whoever actually survived them.
 function renderShadowMeetSection(container, sec, draft, deltas, state) {
+  // 暗影共鸣 is a global passive -- 暗影使者 doesn't need to be in any of the
+  // rooms below to recover HP from them. If they're not already part of one
+  // of those rooms' rows, they'd otherwise never appear anywhere in this
+  // accordion even though the resonance total was still added to their
+  // health, which reads as "nothing happened" even though it did. Show them
+  // in their own card whenever that's the case.
+  const shownIds = new Set(sec.data.events.flatMap((ev) => ev.playerIds));
+  const envoy = draft.working.find((p) => p.roleId === "shadow_envoy" && p.health > 0 && !shownIds.has(p.id));
+  const envoyDelta = envoy ? settlementHealthDelta(deltas, envoy.id) : 0;
   container.innerHTML = `
     ${sec.data.events.length ? sec.data.events.map((ev) => {
       const players = ev.playerIds.map((id) => draft.working.find((p) => p.id === id)).filter(Boolean);
@@ -582,6 +591,17 @@ function renderShadowMeetSection(container, sec, draft, deltas, state) {
           </table></div>
         </div>`;
     }).join("") : `<div style="color:#8b9482;font-size:13px;">本轮没有房间发生暗影与人相遇事件。</div>`}
+    ${envoy && envoyDelta ? (() => {
+      const { before, after } = settlementBeforeAfter(sec, envoy.id, envoy.health, envoyDelta);
+      return `
+        <div class="settlement-event-group">
+          <div style="font-weight:700;margin-bottom:6px;">🌙 暗影共鸣（不在同一房间也会触发，来自本轮其他房间的暗影吸取）</div>
+          <div style="overflow-x:auto;"><table class="stats-table">
+            <thead><tr><th>玩家</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
+            <tbody><tr><td>${settlementPlayerLabel(envoy.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(envoyDelta, "🌙", sec.committed)}</td></tr></tbody>
+          </table></div>
+        </div>`;
+    })() : ""}
     ${settlementFooterHtml(sec)}
   `;
   wireSettlementFooter(container, "shadow_meet");
@@ -1103,20 +1123,31 @@ function renderDashboard(state) {
   } else if (adminTab === "map" && isProgress) {
     const hackerMark = state.hackerRoomMark && state.hackerRoomMark.round === state.round ? state.hackerRoomMark : null;
     const opinionLeader = state.players.find((p) => p.roleId === "opinion_leader");
+    // Every settlement section's math is computed once from a snapshot taken
+    // when 结算 opens -- a room/vote/rocket change made after that would
+    // never actually reach it, so positions are locked for the round while
+    // a draft is open (取消结算 first to make a correction, matching the
+    // same guard server.js now enforces on admin:setPlayerRoom/setFloorVote/
+    // setRocketTarget).
+    const settlementLocked = !!(state.settlementDraft && state.settlementDraft.round === state.round);
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:16px;margin-bottom:4px;">楼层中毒 / 玩家位置</div>
+        ${settlementLocked ? `
+          <div style="font-size:13px;color:#d8b258;margin-bottom:12px;background:rgba(216,178,88,0.1);border:1px solid rgba(216,178,88,0.4);border-radius:6px;padding:8px 12px;">
+            🔒 结算阶段已开始，本回合位置/投毒/火箭筒目标已锁定，不可再拖动修改。如需更正，请先在“结算阶段”标签点击“取消结算”。
+          </div>` : `
         <div style="font-size:13px;color:#8b9482;margin-bottom:12px;">
           ${isEditing ? "点击左侧楼层标签以激活/解除该层中毒（需点击“确认”生效）" : "点击上方“编辑”以修改中毒楼层"}
           · 拖动玩家图标到房间中标记位置（立即生效，拖回下方框内可移除）
           · 拖动玩家图标到左侧楼层标签记录本轮投毒意向（每人限1票，会覆盖其上一票；点击票数圆点可取消）
-        </div>
+        </div>`}
         ${hackerMark ? `<div style="font-size:13px;color:#ff8a80;margin-bottom:12px;">黑客本轮秘密关闭：<b>${getRoomLabel(hackerMark.room)}</b>（仅黑客本人与管理员可见）</div>` : ""}
         ${opinionLeader ? `<div style="font-size:13px;color:#d8b258;margin-bottom:12px;">意见领袖（玩家 ${opinionLeader.id}）额外票数：${floorVoteUsedFor(opinionLeader, state)}/${floorVoteCapFor(opinionLeader, state) - 1}（每次拖动其图标到楼层再投1票，含首票共上限 ${floorVoteCapFor(opinionLeader, state)} 票）</div>` : ""}
         <div class="rocket-tray">
-          <div class="rocket-icon" id="rocket-drag-icon" title="拖动到房间标记本轮火箭筒袭击目标">🚀</div>
+          <div class="rocket-icon${settlementLocked ? " locked" : ""}" id="rocket-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到房间标记本轮火箭筒袭击目标"}">🚀</div>
           ${state.rocketTargetRoom
-            ? `<span>本轮火箭筒目标：<b>${getRoomLabel(state.rocketTargetRoom)}</b></span><button class="btn secondary" id="rocket-cancel-btn" style="padding:4px 10px;font-size:12px;">取消</button>`
+            ? `<span>本轮火箭筒目标：<b>${getRoomLabel(state.rocketTargetRoom)}</b></span>${settlementLocked ? "" : `<button class="btn secondary" id="rocket-cancel-btn" style="padding:4px 10px;font-size:12px;">取消</button>`}`
             : `<span style="color:#8b9482;font-size:13px;">拖动火箭图标到房间以标记本轮火箭筒目标</span>`}
         </div>
         <div id="meeple-tray" class="meeple-tray"></div>
@@ -1143,16 +1174,20 @@ function renderDashboard(state) {
       const rocketEl = poisonMapEl.querySelector(`.room[data-room-id="${state.rocketTargetRoom}"]`);
       if (rocketEl) rocketEl.classList.add("room-rocket-target");
     }
-    renderFloorVoteBadges(poisonMapEl, state);
+    renderFloorVoteBadges(poisonMapEl, state, settlementLocked);
     renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
     renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);
-    tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => attachMeepleDrag(el, state));
-    attachRocketDrag(tabBody.querySelector("#rocket-drag-icon"));
-    const rocketCancelBtn = tabBody.querySelector("#rocket-cancel-btn");
-    if (rocketCancelBtn) {
-      rocketCancelBtn.addEventListener("click", () => {
-        socket.send({ type: "admin:setRocketTarget", room: null, password: adminPassword });
-      });
+    if (!settlementLocked) {
+      tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => attachMeepleDrag(el, state));
+      attachRocketDrag(tabBody.querySelector("#rocket-drag-icon"));
+      const rocketCancelBtn = tabBody.querySelector("#rocket-cancel-btn");
+      if (rocketCancelBtn) {
+        rocketCancelBtn.addEventListener("click", () => {
+          socket.send({ type: "admin:setRocketTarget", room: null, password: adminPassword });
+        });
+      }
+    } else {
+      tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => el.classList.add("locked"));
     }
   } else if (adminTab === "poison") {
     const table = state.poisonDamageTable && state.poisonDamageTable.length ? state.poisonDamageTable : DEFAULT_POISON_DAMAGE_TABLE;
@@ -1327,7 +1362,7 @@ function floorVoteUsedFor(player, state) {
 // tokens were dragged there this round — purely a voting indicator. Clicking
 // a dot cancels that one player's vote (same effect as dragging their token
 // back off the floor label), without needing to touch the drag interaction.
-function renderFloorVoteBadges(mapEl, state) {
+function renderFloorVoteBadges(mapEl, state, locked) {
   mapEl.querySelectorAll(".floor-vote-badges").forEach((el) => el.remove());
   mapEl.querySelectorAll(".floor-chip.has-votes").forEach((el) => el.classList.remove("has-votes"));
   // Each player's entry is an array of floor votes -- 意见领袖 can have
@@ -1343,9 +1378,10 @@ function renderFloorVoteBadges(mapEl, state) {
     chip.classList.add("has-votes");
     const badges = document.createElement("div");
     badges.className = "floor-vote-badges";
-    badges.innerHTML = playerIds.map((pid) => `<span class="floor-vote-dot" data-vote-pid="${pid}" data-vote-floor="${floor}" title="点击取消该玩家在此楼层的一票" style="background:${meepleColor(pid)};">${pid}</span>`).join("");
+    badges.innerHTML = playerIds.map((pid) => `<span class="floor-vote-dot${locked ? " locked" : ""}" data-vote-pid="${pid}" data-vote-floor="${floor}" title="${locked ? "结算阶段已锁定" : "点击取消该玩家在此楼层的一票"}" style="background:${meepleColor(pid)};">${pid}</span>`).join("");
     chip.appendChild(badges);
   }
+  if (locked) return; // 结算 is open -- votes are frozen into the draft, no more editing until 取消结算
   mapEl.querySelectorAll(".floor-vote-dot[data-vote-pid]").forEach((dot) => {
     dot.addEventListener("click", (e) => {
       e.stopPropagation(); // don't also trigger the chip's own poison-toggle click

@@ -168,6 +168,10 @@ html, body {
 }
 .meeple.draggable { cursor: grab; touch-action: none; }
 .meeple.dragging { opacity: 0.35; }
+/* 结算 is open for this round -- positions are frozen into the settlement
+   draft, so dragging is disabled entirely (see admin.html's settlementLocked
+   check) rather than silently no-oping against the server's own guard. */
+.meeple.locked { cursor: not-allowed; opacity: 0.55; filter: grayscale(0.4); }
 .meeple-drag-ghost {
   position: fixed; width: 26px; height: 26px; margin: -13px 0 0 -13px;
   border-radius: 50%; display: flex; align-items: center; justify-content: center;
@@ -198,6 +202,8 @@ html, body {
   cursor: pointer;
 }
 .floor-vote-dot:hover { transform: scale(1.25); border-color: #fff; }
+.floor-vote-dot.locked { cursor: not-allowed; opacity: 0.6; }
+.floor-vote-dot.locked:hover { transform: none; }
 
 /* Rocket Launcher target picker (admin map, in-progress only). */
 .rocket-tray {
@@ -214,6 +220,7 @@ html, body {
   background: rgba(214,40,57,0.15); border: 1px solid rgba(214,40,57,0.4);
 }
 .rocket-icon.dragging { opacity: 0.35; }
+.rocket-icon.locked { cursor: not-allowed; opacity: 0.5; filter: grayscale(0.4); }
 .rocket-drag-ghost {
   position: fixed; font-size: 26px; margin: -20px 0 0 -20px;
   pointer-events: none; z-index: 3000; cursor: grabbing;

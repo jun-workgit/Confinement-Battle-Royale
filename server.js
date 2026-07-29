@@ -1107,6 +1107,14 @@ wss.on("connection", (ws) => {
       // applies immediately rather than going through the batched edit/confirm.
       case "admin:setPlayerRoom": {
         if (state.phase !== "in_progress") return;
+        // Positions are locked for the whole round once 结算 is open --
+        // every section's math was computed from `working`, a snapshot
+        // taken when the draft was created, so a room change here could
+        // never actually reach it without recomputing section data out
+        // from under whatever admin's already reviewed or submitted (see
+        // 取消结算 for the intended way to fix a placement mid-settlement:
+        // discard the draft, correct the room, start fresh).
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
         const playerId = Math.round(Number(msg.playerId));
         const player = state.players.find((p) => p.id === playerId);
         if (!player) return;
@@ -1115,26 +1123,6 @@ wss.on("connection", (ws) => {
         } else {
           if (!ROOM_IDS.has(msg.room)) return;
           player.room = msg.room;
-        }
-        // A room correction made mid-settlement (e.g. admin flips back to
-        // 地图 to fix a placement while 结算 is already open) needs to reach
-        // the draft too -- every room-keyed section's data was computed once
-        // from `working` at draft creation, so without this it would keep
-        // silently using whatever room this player was in when 结算 was
-        // first clicked. hunger/items/poison are deliberately left alone
-        // here even though they also touch room somewhere -- recomputing
-        // them from scratch would blow away whatever admin has already
-        // manually toggled for them; surgery/combat/shadow_meet/rocket have
-        // no manual-toggle state to lose, so it's safe to just refresh them.
-        const draft = state.settlementDraft;
-        if (draft && draft.round === state.round) {
-          const wp = draft.working.find((p) => p.id === playerId);
-          if (wp) wp.room = player.room;
-          for (const name of ["surgery", "combat", "shadow_meet", "rocket"]) {
-            if (!draft.sections[name].committed) {
-              draft.sections[name].data = computeSectionDefault(name, draft.working, state);
-            }
-          }
         }
         break;
       }
@@ -1149,6 +1137,10 @@ wss.on("connection", (ws) => {
       // clicking a vote dot) takes exactly one matching vote back off.
       case "admin:setFloorVote": {
         if (state.phase !== "in_progress") return;
+        // Same reasoning as admin:setPlayerRoom -- poison's tally/floors were
+        // already frozen into the draft when 结算 opened; changing votes
+        // after that wouldn't reach the accordion at all. 取消结算 first.
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
         const playerId = Math.round(Number(msg.playerId));
         const player = state.players.find((p) => p.id === playerId);
         if (!player) return;
@@ -1179,6 +1171,9 @@ wss.on("connection", (ws) => {
       // round's blast target; cancelable, auto-cleared on round change.
       case "admin:setRocketTarget": {
         if (state.phase !== "in_progress") return;
+        // Same reasoning as admin:setPlayerRoom -- rocket's target/playerIds
+        // were already frozen into the draft when 结算 opened. 取消结算 first.
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
         if (msg.room === null) {
           state.rocketTargetRoom = null;
         } else {
