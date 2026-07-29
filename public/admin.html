@@ -368,16 +368,18 @@ function previewSectionDeltas(key, sec, draft, state) {
       const realPlayer = state.players.find((pp) => pp.id === p.id);
       if (realPlayer && realPlayer.revivedProtectedRound === state.round) continue;
       if (!isRoomPoisonedClient(p.room, sec.data.floors) || playerItemsClient(state, p.id).gasMask) continue;
-      // Mirrors server.js's commitSectionEffect exactly -- see there for why
-      // "reduce" only needs a room match while "boost" also re-checks the
-      // floor is still in this round's newFloors.
+      // Mirrors server.js's commitSectionEffect exactly -- "reduce" only
+      // matters for a room whose floor was ALREADY poisoned coming into this
+      // round (state.poisonFloors, untouched until this section commits);
+      // "boost" applies to every floor that newly becomes poisoned THIS
+      // round, no target needed.
       let damage = baseDamage;
-      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room) {
+      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room && isRoomPoisonedClient(chemistAction.room, state.poisonFloors)) {
         damage = Math.max(0, damage - 2);
         chemistAdjusted.set(p.id, -2);
-      } else if (chemistAction && chemistAction.type === "boost" && (sec.data.newFloors || []).includes(chemistAction.floor)) {
+      } else if (chemistAction && chemistAction.type === "boost") {
         const roomFloors = MULTI_FLOOR_ROOMS[p.room] || [roomFloorClient(p.room)];
-        if (roomFloors.includes(chemistAction.floor)) {
+        if (roomFloors.some((f) => (sec.data.newFloors || []).includes(f))) {
           damage = damage + 2;
           chemistAdjusted.set(p.id, 2);
         }
@@ -664,75 +666,31 @@ function renderShadowMeetSection(container, sec, draft, deltas, state) {
   wireSettlementFooter(container, "shadow_meet");
 }
 
-// 化学家's "毒性调和" (1 of 2, admin picks while reviewing this section) --
-// only shown at all when the role is actually in play this game. "削弱"
-// targets can only be rooms that are actually poisoned AND occupied right
-// now (picking an empty room would have nothing to reduce); "增强" targets
-// can only be a floor that just became poisoned THIS round, per the role's
-// own card text -- an already-established poisoned floor from an earlier
-// round isn't eligible for the boost.
-function chemistActionControlHtml(sec, state, affectedRooms, newFloors) {
+// 化学家's "毒性调和" is set from the 地图 tab BEFORE 结算 opens (see
+// openChemistActionModal) -- this section only displays whatever was
+// chosen, read-only, since editing it here would retroactively change a
+// section whose default was already frozen from state.chemistAction the
+// moment 结算 started (same reasoning as the map-lock on rooms/votes/rocket).
+function chemistActionSummaryHtml(sec, state) {
   const chemist = state.players.find((p) => p.roleId === "chemist");
   if (!state.rolesEnabled || !chemist) return "";
   const action = sec.data.chemistAction;
-  const disabled = sec.committed;
-  const type = action ? action.type : "";
-  const targetOptionsHtml = type === "reduce"
-    ? (affectedRooms.length ? affectedRooms.map((r) => `<option value="${r}" ${action && action.room === r ? "selected" : ""}>${getRoomLabel(r)}</option>`).join("") : `<option value="">无已中毒且有人的房间</option>`)
-    : type === "boost"
-    ? (newFloors.length ? newFloors.map((f) => `<option value="${f}" ${action && action.floor === f ? "selected" : ""}>${f} 楼</option>`).join("") : `<option value="">本轮无新增毒气楼层</option>`)
-    : "";
-  return `
-    <div class="settlement-event-group" style="margin-bottom:12px;">
-      <div style="font-weight:700;margin-bottom:6px;">🧪 化学家（玩家 ${chemist.id}）· 毒性调和（2选1，可不使用）</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-        <select id="chemist-action-type" ${disabled ? "disabled" : ""}>
-          <option value="" ${!type ? "selected" : ""}>本轮不使用</option>
-          <option value="reduce" ${type === "reduce" ? "selected" : ""}>削弱：指定已中毒房间本轮-2（最低为0）</option>
-          <option value="boost" ${type === "boost" ? "selected" : ""}>增强：本轮新增毒气楼层伤害+2</option>
-        </select>
-        <select id="chemist-action-target" ${disabled || !type ? "disabled" : ""} style="${type ? "" : "display:none;"}">${targetOptionsHtml}</select>
-      </div>
-    </div>`;
-}
-
-function wireChemistActionControl(container, sec, draft, state) {
-  const typeSel = container.querySelector("#chemist-action-type");
-  if (!typeSel) return;
-  const send = (chemistAction) => {
-    socket.send({ type: "admin:settlementSetSectionData", section: "poison", data: { chemistAction }, password: adminPassword });
-  };
-  typeSel.addEventListener("change", () => {
-    const type = typeSel.value;
-    if (!type) { send(null); return; }
-    const floors = sec.data.floors;
-    const affectedRooms = [...new Set(draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors)).map((p) => p.room))];
-    const newFloors = sec.data.newFloors || [];
-    if (type === "reduce") send(affectedRooms.length ? { type: "reduce", room: affectedRooms[0] } : null);
-    else send(newFloors.length ? { type: "boost", floor: newFloors[0] } : null);
-  });
-  const targetSel = container.querySelector("#chemist-action-target");
-  if (targetSel) {
-    targetSel.addEventListener("change", () => {
-      const type = typeSel.value;
-      const val = targetSel.value;
-      if (!val) return;
-      send(type === "reduce" ? { type: "reduce", room: val } : { type: "boost", floor: val });
-    });
-  }
+  const text = !action ? "本轮未使用"
+    : action.type === "reduce" ? `削弱：${getRoomLabel(action.room)} 本轮-2（最低为0）`
+    : "增强：本轮新增毒气楼层伤害+2";
+  return `<div style="margin-bottom:12px;font-size:14px;">🧪 化学家（玩家 ${chemist.id}）· 毒性调和：<b>${text}</b>（结算开始前请到"地图"标签设置）</div>`;
 }
 
 function renderPoisonSection(container, sec, draft, deltas, state) {
   const floors = sec.data.floors; // all currently-active poison floors -- this is what deals damage below
   const newFloors = sec.data.newFloors || [];
   const affected = draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors));
-  const affectedRooms = [...new Set(affected.map((p) => p.room))];
   const tallyEntries = Object.entries(sec.data.tally);
   container.innerHTML = `
     <div style="margin-bottom:8px;font-size:14px;">投票结果：${tallyEntries.length ? tallyEntries.map(([f, c]) => `${f} 楼（${c} 票）`).join("，") : "本轮无人投票"}</div>
     <div style="margin-bottom:4px;font-size:14px;">本轮新增"毒气"楼层：<b>${newFloors.length ? newFloors.join("、") + " 楼" : "无"}</b></div>
     <div style="margin-bottom:12px;font-size:14px;">本轮受"毒气"影响楼层（含此前已中毒，不会消散）：<b>${floors.length ? floors.join("、") + " 楼" : "无"}</b></div>
-    ${chemistActionControlHtml(sec, state, affectedRooms, newFloors)}
+    ${chemistActionSummaryHtml(sec, state)}
     ${affected.length ? `
       <div style="overflow-x:auto;"><table class="stats-table">
         <thead><tr><th>玩家</th><th>房间</th><th>结算前</th><th>结算后</th><th>变化</th></tr></thead>
@@ -748,7 +706,6 @@ function renderPoisonSection(container, sec, draft, deltas, state) {
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
     ${settlementFooterHtml(sec)}
   `;
-  wireChemistActionControl(container, sec, draft, state);
   wireSettlementFooter(container, "poison");
 }
 
@@ -1248,6 +1205,13 @@ function renderDashboard(state) {
     // same guard server.js now enforces on admin:setPlayerRoom/setFloorVote/
     // setRocketTarget).
     const settlementLocked = !!(state.settlementDraft && state.settlementDraft.round === state.round);
+    // "if the role is active and alive" -- a dead 化学家 can't use the
+    // ability at all, so the whole control disappears rather than just
+    // disabling it (matches how other role-gated actions in this app behave).
+    const chemist = state.rolesEnabled ? state.players.find((p) => p.roleId === "chemist" && p.health > 0) : null;
+    const chemistActionLabel = !state.chemistAction ? "未设置"
+      : state.chemistAction.type === "reduce" ? `削弱：${getRoomLabel(state.chemistAction.room)}`
+      : "增强：本轮新增毒气楼层+2";
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:16px;margin-bottom:4px;">楼层中毒 / 玩家位置</div>
@@ -1262,6 +1226,13 @@ function renderDashboard(state) {
         </div>`}
         ${hackerMark ? `<div style="font-size:13px;color:#ff8a80;margin-bottom:12px;">黑客本轮秘密关闭：<b>${getRoomLabel(hackerMark.room)}</b>（仅黑客本人与管理员可见）</div>` : ""}
         ${opinionLeader ? `<div style="font-size:13px;color:#d8b258;margin-bottom:12px;">意见领袖（玩家 ${opinionLeader.id}）额外票数：${floorVoteUsedFor(opinionLeader, state)}/${floorVoteCapFor(opinionLeader, state) - 1}（每次拖动其图标到楼层再投1票，含首票共上限 ${floorVoteCapFor(opinionLeader, state)} 票）</div>` : ""}
+        ${chemist ? `<div style="font-size:13px;color:#d8b258;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span>🧪 化学家（玩家 ${chemist.id}）· 毒性调和：<b>${chemistActionLabel}</b></span>
+          ${settlementLocked ? "" : `
+            <button class="btn secondary" id="chemist-action-btn" style="padding:4px 10px;font-size:12px;">设置</button>
+            ${state.chemistAction ? `<button class="btn secondary" id="chemist-action-clear-btn" style="padding:4px 10px;font-size:12px;">取消</button>` : ""}
+          `}
+        </div>` : ""}
         <div class="rocket-tray">
           <div class="rocket-icon${settlementLocked ? " locked" : ""}" id="rocket-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到房间标记本轮火箭筒袭击目标"}">🚀</div>
           ${state.rocketTargetRoom
@@ -1302,6 +1273,16 @@ function renderDashboard(state) {
       if (rocketCancelBtn) {
         rocketCancelBtn.addEventListener("click", () => {
           socket.send({ type: "admin:setRocketTarget", room: null, password: adminPassword });
+        });
+      }
+      const chemistActionBtn = tabBody.querySelector("#chemist-action-btn");
+      if (chemistActionBtn) {
+        chemistActionBtn.addEventListener("click", () => openChemistActionModal(state));
+      }
+      const chemistActionClearBtn = tabBody.querySelector("#chemist-action-clear-btn");
+      if (chemistActionClearBtn) {
+        chemistActionClearBtn.addEventListener("click", () => {
+          socket.send({ type: "admin:setChemistAction", action: null, password: adminPassword });
         });
       }
     } else {
@@ -1782,6 +1763,70 @@ function openInventoryModal(p, state) {
   function close() { document.body.removeChild(overlay); }
   overlay.querySelector(".inventory-close").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+}
+
+// 化学家's "毒性调和" (1 of 2 per round) -- set here, from the 地图 tab,
+// BEFORE 结算 opens (same pre-结算 timing as floor votes/rocket target, and
+// locked the same way once a draft exists for the round). "削弱" can only
+// target a room whose floor is ALREADY poisoned coming into this round;
+// "增强" has no target of its own -- it applies to whatever floor(s) this
+// round's vote ends up newly poisoning, decided later at 结算.
+function openChemistActionModal(state) {
+  const current = state.chemistAction;
+  const eligibleRooms = STOPPABLE_ROOM_IDS.filter((r) => isRoomPoisonedClient(r, state.poisonFloors));
+  let type = current ? current.type : "";
+  let room = current && current.type === "reduce" ? current.room : (eligibleRooms[0] || "");
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info chemist-action-modal">
+      <div class="modal-title">🧪 化学家 · 毒性调和（2选1，可不使用）</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin:12px 0;">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="radio" name="chemist-type" value="" ${!type ? "checked" : ""}> 本轮不使用
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="radio" name="chemist-type" value="reduce" ${type === "reduce" ? "checked" : ""}> 削弱：指定已中毒房间本轮-2（最低为0）
+        </label>
+        <div id="chemist-room-row" style="margin-left:26px;${type === "reduce" ? "" : "display:none;"}">
+          <select id="chemist-room-select" ${eligibleRooms.length ? "" : "disabled"}>
+            ${eligibleRooms.length ? eligibleRooms.map((r) => `<option value="${r}" ${r === room ? "selected" : ""}>${getRoomLabel(r)}</option>`).join("") : `<option value="">暂无已中毒房间</option>`}
+          </select>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="radio" name="chemist-type" value="boost" ${type === "boost" ? "checked" : ""}> 增强：本轮新增毒气楼层伤害+2
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn secondary chemist-action-cancel">取消</button>
+        <button class="btn chemist-action-confirm">确认</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const roomRow = overlay.querySelector("#chemist-room-row");
+  const roomSelect = overlay.querySelector("#chemist-room-select");
+  overlay.querySelectorAll('input[name="chemist-type"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      type = radio.value;
+      roomRow.style.display = type === "reduce" ? "" : "none";
+    });
+  });
+  if (roomSelect) {
+    roomSelect.addEventListener("change", () => { room = roomSelect.value; });
+  }
+
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".chemist-action-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".chemist-action-confirm").addEventListener("click", () => {
+    let action = null;
+    if (type === "reduce" && room) action = { type: "reduce", room };
+    else if (type === "boost") action = { type: "boost" };
+    socket.send({ type: "admin:setChemistAction", action, password: adminPassword });
+    close();
+  });
 }
 
 // Human-readable label for one playerLogs entry's source/detail — mirrors

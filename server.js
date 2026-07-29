@@ -58,6 +58,13 @@ function defaultState() {
     // this round's Rocket Launcher blast target (or null).
     floorVotes: {},
     rocketTargetRoom: null,
+    // 化学家's "毒性调和" (1 of 2, admin sets before 结算 opens, same as
+    // floorVotes/rocketTargetRoom above -- frozen into the poison section's
+    // default the moment 结算 starts, then cleared at admin:finishSettlement):
+    // { type: "boost" } (+2 to every floor that newly becomes poisoned THIS
+    // round) or { type: "reduce", room } (-2, floor of 0, for a room whose
+    // floor is ALREADY poisoned coming into this round).
+    chemistAction: null,
     // Settlement-phase draft — null outside of settlement. See
     // startSettlementDraft() for the shape. `working` holds player
     // health/stats as sections get committed; this is broadcast to every
@@ -386,11 +393,12 @@ function computeSectionDefault(section, working, state) {
       // separately just so the accordion can show what THIS round's vote
       // picked, distinct from floors that were already poisoned coming in.
       const floors = [...new Set([...state.poisonFloors, ...newFloors])];
-      // 化学家's "毒性调和" (1 of 2, admin picks while reviewing this
-      // section -- see commitSectionEffect below): starts unset every round
-      // (never carried over), admin fills it in via
-      // admin:settlementSetSectionData before committing.
-      return { floors, newFloors, tally, chemistAction: null };
+      // 化学家's "毒性调和" (1 of 2, admin sets from the 地图 tab BEFORE 结算
+      // opens -- see admin:setChemistAction) is frozen in here exactly like
+      // state.floorVotes/rocketTargetRoom feed the sections above; re-picking
+      // after 结算 has started is blocked at the source, so this is just
+      // whatever was chosen going in.
+      return { floors, newFloors, tally, chemistAction: state.chemistAction };
     }
     case "hunger": {
       const toggles = {};
@@ -569,20 +577,23 @@ function commitSectionEffect(section, data, working, state) {
         poisonGasMaskImmune.push(p.id); // took no damage, but admin still wants a log record of why
         continue;
       }
-      // 化学家's "毒性调和" (1 of 2 -- see computeSectionDefault's "poison"
-      // case): either designate an ALREADY-poisoned room for -2 this round
-      // (floor of 0), or a floor that just became poisoned THIS round (must
-      // be in data.newFloors, not one poisoned in an earlier round) for +2.
-      // Re-validated here (not just trusted from the UI) since a room's
-      // eligibility can shift between when admin picked it and when this
-      // section actually commits.
+      // 化学家's "毒性调和" (1 of 2, set from the 地图 tab before 结算 opened
+      // -- see admin:setChemistAction/computeSectionDefault's "poison" case):
+      // "reduce" targets a room whose floor(s) were ALREADY poisoned coming
+      // INTO this round (checked against state.poisonFloors, which this
+      // section's own commit only updates further down -- still the
+      // pre-round set at this point), never one THIS round's vote just
+      // added; "boost" applies to EVERY floor that newly becomes poisoned
+      // this round (data.newFloors), no target needed. Re-validated here
+      // (not just trusted from when admin picked it) since eligibility can
+      // shift between then and when this section actually commits.
       let damage = baseDamage;
-      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room) {
+      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room && isRoomPoisoned(chemistAction.room, state.poisonFloors)) {
         damage = Math.max(0, damage - 2);
         chemistAdjusted[p.id] = -2;
-      } else if (chemistAction && chemistAction.type === "boost" && (data.newFloors || []).includes(chemistAction.floor)) {
+      } else if (chemistAction && chemistAction.type === "boost") {
         const roomFloors = MULTI_FLOOR_ROOMS[p.room] || [roomFloor(p.room)];
-        if (roomFloors.includes(chemistAction.floor)) {
+        if (roomFloors.some((f) => (data.newFloors || []).includes(f))) {
           damage = damage + 2;
           chemistAdjusted[p.id] = 2;
         }
@@ -1026,6 +1037,7 @@ wss.on("connection", (ws) => {
           hackerRoomMark: null,
           floorVotes: {},
           rocketTargetRoom: null,
+          chemistAction: null,
           settlementDraft: null,
           playerLogs: {},
           timer: state.timer,
@@ -1174,6 +1186,7 @@ wss.on("connection", (ws) => {
             if (newRound !== state.round) {
               state.floorVotes = {};
               state.rocketTargetRoom = null;
+              state.chemistAction = null;
             }
             state.round = newRound;
           }
@@ -1264,6 +1277,31 @@ wss.on("connection", (ws) => {
         } else {
           if (!ROOM_IDS.has(msg.room)) return;
           state.rocketTargetRoom = msg.room;
+        }
+        break;
+      }
+      // Admin sets/clears 化学家's "毒性调和" for this round from the 地图 tab
+      // (same pre-结算 timing as floorVotes/setRocketTarget above -- frozen
+      // into the poison section's default once 结算 opens, see
+      // computeSectionDefault's "poison" case). Requires the role to actually
+      // be in play and its holder alive -- past that point the pick itself
+      // isn't re-checked again (same precedent as rocketTargetRoom not caring
+      // whether its target room is still valid by the time 结算 runs).
+      case "admin:setChemistAction": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        const chemist = state.players.find((p) => p.roleId === "chemist");
+        if (!state.rolesEnabled || !chemist || chemist.health <= 0) return;
+        if (msg.action === null) {
+          state.chemistAction = null;
+        } else if (msg.action && msg.action.type === "boost") {
+          state.chemistAction = { type: "boost" };
+        } else if (msg.action && msg.action.type === "reduce") {
+          if (!ROOM_IDS.has(msg.action.room)) return;
+          if (!isRoomPoisoned(msg.action.room, state.poisonFloors)) return; // must already be poisoned
+          state.chemistAction = { type: "reduce", room: msg.action.room };
+        } else {
+          return;
         }
         break;
       }
@@ -1394,6 +1432,7 @@ wss.on("connection", (ws) => {
         state.settlementDraft = null;
         state.floorVotes = {};
         state.rocketTargetRoom = null;
+        state.chemistAction = null;
         // Round 0's settlement is what actually starts the game -- there's
         // no separate admin:startGame anymore, so finishing it here both
         // applies its one-off effects and flips Prep -> in_progress, right
