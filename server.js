@@ -649,6 +649,14 @@ function commitSectionEffect(section, data, working, state) {
 
   const newlyDead = [];
   const adrenalineSaved = [];
+  // 入殓师's "每当有勇士变成暗影，你的负重永久+1" -- triggers on EVERY death
+  // this section causes, from whichever section actually causes it (same
+  // "generic, not section-specific" treatment as adrenalineSaved above).
+  // Checked fresh per-death (not once for the whole section) so an
+  // undertaker who themselves dies partway through a multi-death section
+  // still gets credit for deaths that preceded their own, but not their own
+  // or ones after -- "存活状态" is implicit in "if he is alive" per the role.
+  const undertakerGains = {};
   for (const [id, dh] of Object.entries(healthDeltas)) {
     const p = find(Number(id));
     if (!p) continue;
@@ -676,6 +684,11 @@ function commitSectionEffect(section, data, working, state) {
       // up to (e.g. never "1 -> -1", always "1 -> -2" for a threshold of 2).
       after = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
       newlyDead.push(Number(id));
+      const undertaker = working.find((w) => w.roleId === "undertaker" && w.health > 0 && w.id !== Number(id));
+      if (undertaker) {
+        statDeltas[undertaker.id] = { ...statDeltas[undertaker.id], weight: ((statDeltas[undertaker.id] && statDeltas[undertaker.id].weight) || 0) + 1 };
+        undertakerGains[undertaker.id] = (undertakerGains[undertaker.id] || 0) + 1;
+      }
     }
     p.health = after;
     healthDeltas[id] = after - before;
@@ -736,6 +749,7 @@ function commitSectionEffect(section, data, working, state) {
   }
   if (newlyDead.length) extra.newlyDead = newlyDead;
   if (adrenalineSaved.length) extra.adrenalineSaved = adrenalineSaved;
+  if (Object.keys(undertakerGains).length) extra.undertakerGains = undertakerGains;
 
   return { healthDeltas, statDeltas, revivedIds, extra };
 }
@@ -1194,6 +1208,12 @@ wss.on("connection", (ws) => {
             }
             player.stats = newStats;
             player.health = newHealth;
+            // Manual override for 肾上腺素's "next round can't die" clamp --
+            // lets admin grant/revoke it for THIS round as if it had
+            // actually been used last round, without an item-card trail.
+            if (state.phase === "in_progress" && typeof pu.adrenaline === "boolean") {
+              player.adrenalineProtectedRound = pu.adrenaline ? state.round : null;
+            }
           }
         }
         if (state.phase === "in_progress") {

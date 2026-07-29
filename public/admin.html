@@ -61,7 +61,14 @@ const SETTLEMENT_SECTIONS = [
 function startEdit(state) {
   isEditing = true;
   draft = {
-    players: Object.fromEntries(state.players.map((p) => [p.id, { stats: { ...p.stats }, health: p.health }])),
+    players: Object.fromEntries(state.players.map((p) => [p.id, {
+      stats: { ...p.stats }, health: p.health,
+      // Whether THIS round is currently protected (see the clamp in
+      // server.js's commitSectionEffect) -- toggleable here so admin can
+      // grant/revoke it manually before 结算, same as if 肾上腺素 had
+      // actually been used last round, without needing an item-card trail.
+      adrenaline: p.adrenalineProtectedRound === state.round,
+    }])),
     round: state.round,
     poisonFloors: new Set(state.poisonFloors),
   };
@@ -77,7 +84,7 @@ function cancelEdit() {
 function commitEdit(state) {
   const payload = {
     type: "admin:commitEdits",
-    players: Object.entries(draft.players).map(([id, v]) => ({ id: Number(id), stats: v.stats, health: v.health })),
+    players: Object.entries(draft.players).map(([id, v]) => ({ id: Number(id), stats: v.stats, health: v.health, adrenaline: v.adrenaline })),
     password: adminPassword,
   };
   if (state.phase === "in_progress") {
@@ -523,6 +530,20 @@ function settlementChemistTagHtml(sec, deltas, playerId) {
     : `<span class="pill-tag green" style="margin-left:6px;">🧪 化学家削弱-2${suffix}</span>`;
 }
 
+// 入殓师's "每当有勇士变成暗影，你的负重永久+1" -- only ever known once the
+// causing section has committed (unlike adrenaline/chemist, this isn't
+// mirrored in previewSectionDeltas, so there's no "预计" variant here).
+// Shown inline whenever the undertaker happens to already be part of the
+// section's own shown rows (e.g. sharing the room where someone died);
+// the settlement tab's summary line (see renderSettlementTab) is what
+// covers every OTHER case where they aren't.
+function settlementUndertakerTagHtml(sec, playerId) {
+  const gains = sec.committed && sec.applied && sec.applied.extra && sec.applied.extra.undertakerGains;
+  const n = gains && gains[playerId];
+  if (!n) return "";
+  return `<span class="pill-tag amber" style="margin-left:6px;">🪦 入殓师负重+${n}</span>`;
+}
+
 function settlementHealthText(value) {
   return `❤️${value}`;
 }
@@ -610,7 +631,7 @@ function renderCombatSection(container, sec, draft, deltas, state) {
               const powerBase = roleBonusPower ? `${p.stats.power}+${roleBonusPower}=${p.stats.power + roleBonusPower}` : `${p.stats.power}`;
               const powerCell = badges ? `${powerBase} <span style="color:#8b9482;">${badges}</span>` : powerBase;
               const autoLossTag = p.id === autoLossId ? `<span class="pill-tag red" style="margin-left:6px;">对方持枪，直接判负</span>` : "";
-              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${autoLossTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${powerCell}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${autoLossTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementUndertakerTagHtml(sec, p.id)}</td><td>${powerCell}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, kindIcon[ev.kind], sec.committed)}</td></tr>`;
             }).join("")}</tbody>
           </table></div>
         </div>`;
@@ -645,7 +666,7 @@ function renderShadowMeetSection(container, sec, draft, deltas, state) {
               const delta = settlementHealthDelta(deltas, p.id);
               const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
               const envoyTag = p.roleId === "shadow_envoy" && p.health > 0 ? `<span class="pill-tag green" style="margin-left:6px;">🌙 暗影共鸣免疫</span>` : "";
-              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${envoyTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "👻", sec.committed)}</td></tr>`;
+              return `<tr><td>${settlementPlayerLabel(p.id)}${p.health <= 0 ? "（暗影）" : ""}${envoyTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementUndertakerTagHtml(sec, p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "👻", sec.committed)}</td></tr>`;
             }).join("")}</tbody>
           </table></div>
         </div>`;
@@ -701,7 +722,7 @@ function renderPoisonSection(container, sec, draft, deltas, state) {
           const justRevived = state.players.find((pp) => pp.id === p.id)?.revivedProtectedRound === state.round;
           const immuneTag = gasMask ? `<span class="pill-tag green" style="margin-left:6px;">😷 防毒面具免疫</span>`
             : justRevived ? `<span class="pill-tag green" style="margin-left:6px;">✨ 复活首轮免疫</span>` : "";
-          return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementChemistTagHtml(sec, deltas, p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}${immuneTag}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementChemistTagHtml(sec, deltas, p.id)}${settlementUndertakerTagHtml(sec, p.id)}</td><td>${getRoomLabel(p.room)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "☠️", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">没有存活玩家处于本轮"毒气"楼层。</div>`}
     ${settlementFooterHtml(sec)}
@@ -728,7 +749,7 @@ function renderHungerSection(container, sec, draft, state, deltas) {
             : `<td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="water"`, t.water, locked)}</td>
                <td>${settlementSwitchHtml("settlement-hunger-toggle", `data-pid="${pid}" data-field="food"`, t.food, locked)}</td>`;
           return `<tr>
-            <td>${settlementPlayerLabel(pid)}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td>
+            <td>${settlementPlayerLabel(pid)}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementUndertakerTagHtml(sec, p.id)}</td>
             ${waterFoodCells}
             <td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🍽️", sec.committed)}</td>
           </tr>`;
@@ -758,7 +779,7 @@ function renderRocketSection(container, sec, draft, deltas) {
         <tbody>${players.map((p) => {
           const delta = settlementHealthDelta(deltas, p.id);
           const { before, after } = settlementBeforeAfter(sec, p.id, p.health, delta);
-          return `<tr><td>${settlementPlayerLabel(p.id)}${settlementAdrenalineTagHtml(sec, deltas, p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
+          return `<tr><td>${settlementPlayerLabel(p.id)}${settlementAdrenalineTagHtml(sec, deltas, p.id)}${settlementUndertakerTagHtml(sec, p.id)}</td><td>${settlementHealthText(before)}</td><td>${settlementHealthText(after)}</td><td>${settlementDeltaText(delta, "🚀", sec.committed)}</td></tr>`;
         }).join("")}</tbody>
       </table></div>` : `<div style="color:#8b9482;font-size:13px;">目标房间内无玩家，或本轮未设置目标。</div>`}
     ${settlementFooterHtml(sec)}
@@ -883,10 +904,27 @@ function renderSettlementTab(tabBody, state) {
       </div>`;
     return;
   }
+  // 入殓师's "每当有勇士变成暗影，你的负重永久+1" can trigger from whichever
+  // section actually causes a death (combat, shadow_meet, poison, hunger, or
+  // rocket -- see commitSectionEffect's shared clamp loop), so rather than
+  // duplicate a dedicated card in each of those renderers (like 暗影使者's
+  // resonance card), this one summary line covers all of them at once,
+  // tallied from every section committed so far this round.
+  const undertaker = state.rolesEnabled ? state.players.find((p) => p.roleId === "undertaker" && p.health > 0) : null;
+  let undertakerGainTotal = 0;
+  if (undertaker) {
+    for (const s of SETTLEMENT_SECTIONS) {
+      const sec = draft.sections[s.key];
+      if (sec.committed && sec.applied && sec.applied.extra && sec.applied.extra.undertakerGains) {
+        undertakerGainTotal += sec.applied.extra.undertakerGains[undertaker.id] || 0;
+      }
+    }
+  }
   tabBody.innerHTML = `
     <div class="card">
       <div style="font-weight:700;font-size:16px;margin-bottom:4px;">结算阶段 · 第 ${draft.round} 回合</div>
       <div style="font-size:13px;color:#8b9482;margin-bottom:16px;">逐项提交后仅管理员可见，全部 8 项提交后点击上方"结算完成"才会一次性生效给所有玩家。</div>
+      ${undertaker ? `<div style="font-size:13px;color:#d8b258;margin-bottom:16px;">🪦 入殓师（玩家 ${undertaker.id}）· 每当有玩家变成暗影，负重永久+1${undertakerGainTotal ? `（本轮已生效 ${undertakerGainTotal} 次，负重+${undertakerGainTotal}）` : "（本轮暂无触发）"}</div>` : ""}
       <div class="settlement-accordion">
         ${SETTLEMENT_SECTIONS.map((s) => {
           const sec = draft.sections[s.key];
@@ -1675,14 +1713,20 @@ function roomLabelHtml(room, roomCounts, conflictColors) {
 }
 
 // protectedNow = 肾上腺素 used last round -- this round can't drop below 1
-// health. Purely informational (the clamp itself lives in server.js's
-// commitSectionEffect); shown as a small shield next to the value.
+// health (the clamp itself lives in server.js's commitSectionEffect). View
+// mode shows this as a plain shield next to the value; edit mode turns it
+// into a toggle so admin can grant/revoke the protection manually for this
+// round -- as if it had actually been used last round -- without needing an
+// item-card trail (see startEdit/commitEdit's draft.players[pid].adrenaline).
 function healthCellHtml(pid, health, editable, protectedNow, threshold) {
+  const shieldHtml = editable
+    ? `<button type="button" class="stepper-btn sm" data-toggle-adrenaline="${pid}" title="点击切换：本轮肾上腺素保护（生命不会低于1）" style="${protectedNow ? "color:#4caf50;" : "color:#8b9482;opacity:0.5;"}">🛡️</button>`
+    : (protectedNow ? `<span title="肾上腺素保护中：本轮生命不会低于1" style="color:#4caf50;">🛡️</span>` : "");
   return `
     <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
       <div style="display:flex;align-items:center;gap:4px;">
         ${editable ? fieldStepperHtml(pid, "health", health) : `<span>${health}</span>`}
-        ${protectedNow ? `<span title="肾上腺素保护中：本轮生命不会低于1" style="color:#4caf50;">🛡️</span>` : ""}
+        ${shieldHtml}
       </div>
       ${miniHealthBarHtml(health, threshold)}
     </div>`;
@@ -2185,7 +2229,7 @@ function renderPlayersTable(tbody, state) {
       const badges = weaponBadgesHtml(p.items);
       return `<tr>
         <td>玩家 ${p.id}</td>
-        <td>${healthCellHtml(p.id, d.health, true, protectedNow, reviveThreshold)}</td>
+        <td>${healthCellHtml(p.id, d.health, true, d.adrenaline, reviveThreshold)}</td>
         <td><button class="btn ${dead ? "" : "secondary"}" data-toggle-dead="${p.id}" style="padding:5px 10px;font-size:12px;">${dead ? "复活" : "标记死亡"}</button></td>
         <td>${statsReadyTagHtml(d.stats)}</td>
         <td>${roomLabelHtml(p.room, roomCounts, conflictColors)}</td>
@@ -2270,6 +2314,14 @@ function renderPlayersTable(tbody, state) {
         // hardcoded -2, so this manual toggle stays correct even when
         // admin has raised the threshold for the round.
         d.health = d.health <= 0 ? DEFAULT_HEALTH : -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
+        render();
+      });
+    });
+    tbody.querySelectorAll("[data-toggle-adrenaline]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const pid = Number(btn.dataset.toggleAdrenaline);
+        const d = draft.players[pid];
+        d.adrenaline = !d.adrenaline;
         render();
       });
     });
