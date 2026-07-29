@@ -394,6 +394,11 @@ function computeSectionDefault(section, working, state) {
     }
     case "hunger": {
       const toggles = {};
+      // Round 1's toggle has no effect either way (see commitSectionEffect's
+      // "state.round >= 2" gate) -- defaulting everyone to "handed in" here
+      // avoids a wall of red switches that reads as "10 players are about to
+      // lose health" when none of them actually will this round.
+      const noEffectYet = state.round < 2;
       for (const p of working) {
         if (p.health <= 0) continue; // shadows don't hand in water/food
         // Opt-in: admin actively checks a player off as having handed
@@ -404,7 +409,8 @@ function computeSectionDefault(section, working, state) {
         const realPlayer = state.players.find((pp) => pp.id === p.id);
         const justRevived = !!(realPlayer && realPlayer.revivedProtectedRound === state.round);
         const exempt = p.room === "B204" || justRevived;
-        toggles[p.id] = { water: exempt, food: exempt, exempt, reason: p.room === "B204" ? "B204" : justRevived ? "revived" : null };
+        const defaultOn = exempt || noEffectYet;
+        toggles[p.id] = { water: defaultOn, food: defaultOn, exempt, reason: p.room === "B204" ? "B204" : justRevived ? "revived" : null };
       }
       return { toggles };
     }
