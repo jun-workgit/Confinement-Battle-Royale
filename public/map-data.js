@@ -680,11 +680,16 @@ function assignRoomConflictColors(roomCounts) {
 
 // Compact health/absorb bar for dense contexts like the admin table — same
 // visual language as the player portrait bar but without the caption/margins.
-function miniHealthBarHtml(health) {
+// `threshold` is this game's revive threshold (admin-editable, see
+// DEFAULT_REVIVE_THRESHOLD) -- the absorb bar fills from 0% (just died,
+// need = threshold) to 100% (need = 0, revives), so a game running with a
+// threshold other than the default must use it here too, not a hardcoded 2.
+function miniHealthBarHtml(health, threshold) {
   const dead = health <= 0;
   if (dead) {
+    const t = threshold || DEFAULT_REVIVE_THRESHOLD;
     const need = Math.max(0, -health);
-    const pct = Math.max(0, Math.min(100, ((2 - need) / 2) * 100));
+    const pct = Math.max(0, Math.min(100, ((t - need) / t) * 100));
     return `
       <div class="mini-bar-track absorb"><div class="mini-bar-thumb" style="left:${pct}%;"></div></div>
       <div class="mini-bar-caption dead">需吸取 ${need}</div>`;

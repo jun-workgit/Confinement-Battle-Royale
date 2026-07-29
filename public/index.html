@@ -304,8 +304,12 @@ function renderMapTab(container, state, player) {
 function renderPortraitHealthHtml(player) {
   const dead = player.health <= 0;
   if (dead) {
+    // Same admin-editable threshold as the death clamp itself (see
+    // server.js's commitSectionEffect) -- not a hardcoded 2, so this bar
+    // still fills correctly when admin has raised it for the game.
+    const threshold = (latestState && latestState.reviveThreshold) || DEFAULT_REVIVE_THRESHOLD;
     const need = Math.max(0, -player.health);
-    const pct = Math.max(0, Math.min(100, ((2 - need) / 2) * 100));
+    const pct = Math.max(0, Math.min(100, ((threshold - need) / threshold) * 100));
     return `
       <div class="portrait-health">
         <div class="stat-bar-track absorb"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>

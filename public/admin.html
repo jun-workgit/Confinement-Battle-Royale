@@ -1353,6 +1353,12 @@ function attachMeepleDrag(el, state) {
         const votingPlayer = state.players.find((p) => p.id === playerId);
         if (votingPlayer && votingPlayer.health <= 0) {
           showAdminToast(`玩家 ${playerId} 已成为暗影，无法参与毒气投票`);
+        } else if (state.poisonFloors.includes(target.floor)) {
+          // "毒气" never dissipates once a floor is poisoned (see
+          // isRoomPoisoned in server.js) -- a vote for it this round can
+          // only ever be wasted, so it's blocked at the source instead of
+          // silently doing nothing once the server drops it too.
+          showAdminToast(`${target.floor} 楼已是"毒气"楼层，无需再投票`);
         } else {
           socket.send({ type: "admin:setFloorVote", playerId, floor: target.floor, password: adminPassword });
         }
@@ -1492,14 +1498,14 @@ function roomLabelHtml(room, roomCounts, conflictColors) {
 // protectedNow = 肾上腺素 used last round -- this round can't drop below 1
 // health. Purely informational (the clamp itself lives in server.js's
 // commitSectionEffect); shown as a small shield next to the value.
-function healthCellHtml(pid, health, editable, protectedNow) {
+function healthCellHtml(pid, health, editable, protectedNow, threshold) {
   return `
     <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
       <div style="display:flex;align-items:center;gap:4px;">
         ${editable ? fieldStepperHtml(pid, "health", health) : `<span>${health}</span>`}
         ${protectedNow ? `<span title="肾上腺素保护中：本轮生命不会低于1" style="color:#4caf50;">🛡️</span>` : ""}
       </div>
-      ${miniHealthBarHtml(health)}
+      ${miniHealthBarHtml(health, threshold)}
     </div>`;
 }
 
@@ -1820,6 +1826,7 @@ function renderPlayersTable(tbody, state) {
   }
   const conflictColors = assignRoomConflictColors(roomCounts);
 
+  const reviveThreshold = state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD;
   tbody.innerHTML = state.players.map((p) => {
     const protectedNow = p.adrenalineProtectedRound === state.round;
     if (isEditing) {
@@ -1828,7 +1835,7 @@ function renderPlayersTable(tbody, state) {
       const badges = weaponBadgesHtml(p.items);
       return `<tr>
         <td>玩家 ${p.id}</td>
-        <td>${healthCellHtml(p.id, d.health, true, protectedNow)}</td>
+        <td>${healthCellHtml(p.id, d.health, true, protectedNow, reviveThreshold)}</td>
         <td><button class="btn ${dead ? "" : "secondary"}" data-toggle-dead="${p.id}" style="padding:5px 10px;font-size:12px;">${dead ? "复活" : "标记死亡"}</button></td>
         <td>${statsReadyTagHtml(d.stats)}</td>
         <td>${roomLabelHtml(p.room, roomCounts, conflictColors)}</td>
@@ -1842,7 +1849,7 @@ function renderPlayersTable(tbody, state) {
     const sumClass = (p.stats.power + p.stats.speed + p.stats.weight) >= STAT_POINTS_TOTAL ? "sum-full" : "";
     return `<tr>
       <td>玩家 ${p.id}</td>
-      <td>${healthCellHtml(p.id, p.health, false, protectedNow)}</td>
+      <td>${healthCellHtml(p.id, p.health, false, protectedNow, reviveThreshold)}</td>
       <td><span class="pill-tag ${dead ? "purple" : "green"}">${dead ? "暗影" : "存活"}</span></td>
       <td>${statsReadyTagHtml(p.stats)}</td>
       <td>${roomLabelHtml(p.room, roomCounts, conflictColors)}</td>
@@ -1908,7 +1915,11 @@ function renderPlayersTable(tbody, state) {
       btn.addEventListener("click", () => {
         const pid = Number(btn.dataset.toggleDead);
         const d = draft.players[pid];
-        d.health = d.health <= 0 ? 10 : -2;
+        // Death always sets health to exactly -(this game's revive
+        // threshold) -- see server.js's commitSectionEffect -- not a
+        // hardcoded -2, so this manual toggle stays correct even when
+        // admin has raised the threshold for the round.
+        d.health = d.health <= 0 ? DEFAULT_HEALTH : -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
         render();
       });
     });

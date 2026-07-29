@@ -1201,6 +1201,11 @@ wss.on("connection", (ws) => {
           delete state.floorVotes[playerId];
         } else {
           if (!FLOOR_IDS.has(msg.floor)) return;
+          // "毒气" never dissipates once a floor is poisoned (see
+          // isRoomPoisoned) -- a vote for it this round can only ever be
+          // wasted, so it's rejected outright instead of silently tallying
+          // toward a floor that's already maxed out.
+          if (state.poisonFloors.includes(msg.floor)) return;
           const cap = floorVoteCapFor(player, state);
           if (cap <= 1) {
             state.floorVotes[playerId] = [msg.floor];
