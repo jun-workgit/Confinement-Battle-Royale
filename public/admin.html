@@ -1298,6 +1298,35 @@ function renderDashboard(state) {
           });
         }
       }
+
+      // Same idea, for 201 (基因库)'s stat bonus -- stacked directly above
+      // the 102 zone (201 sits one floor up from 102 on the map).
+      const geneZone = document.createElement("div");
+      geneZone.className = `gene-mark-zone${settlementLocked ? " locked" : ""}`;
+      geneZone.title = settlementLocked ? "结算阶段已锁定" : "拖动玩家图标到此处标记本轮经过 201 基因库（未停留）";
+      geneZone.style.left = "46.08%";
+      geneZone.style.top = "8.22%";
+      geneZone.style.width = "11.29%";
+      geneZone.style.height = "10.41%";
+      geneZone.textContent = "🧬 经过201";
+      mapImgWrap.appendChild(geneZone);
+
+      const geneMarkedIds = Object.keys(state.geneMarks || {}).filter((id) => state.geneMarks[id].round === state.round);
+      if (geneMarkedIds.length) {
+        const geneBadges = document.createElement("div");
+        geneBadges.className = "laser-mark-badges";
+        geneBadges.style.left = "46.08%";
+        geneBadges.style.top = "calc(8.22% + 10.41% + 2px)";
+        geneBadges.innerHTML = geneMarkedIds.map((id) => `<span class="laser-mark-dot${settlementLocked ? " locked" : ""}" data-gene-pid="${id}" title="${settlementLocked ? "结算阶段已锁定" : "点击取消该玩家本轮的201基因库标记"}" style="background:${meepleColor(Number(id))};">${id}</span>`).join("");
+        mapImgWrap.appendChild(geneBadges);
+        if (!settlementLocked) {
+          geneBadges.querySelectorAll(".laser-mark-dot[data-gene-pid]").forEach((dot) => {
+            dot.addEventListener("click", () => {
+              socket.send({ type: "admin:setGeneMark", playerId: Number(dot.dataset.genePid), action: "remove", password: adminPassword });
+            });
+          });
+        }
+      }
     }
     renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);
     if (!settlementLocked) {
@@ -1416,6 +1445,11 @@ function attachMeepleDrag(el, state) {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     e.preventDefault();
     const playerId = Number(el.dataset.playerId);
+    // Captured before the drag starts so "moving OUT of 201" can be
+    // detected on drop -- state.players itself doesn't change until the
+    // server round-trips setPlayerRoom back, so this is still accurate at
+    // pointerdown time regardless of how the drag ends.
+    const fromRoom = (state.players.find((p) => p.id === playerId) || {}).room;
 
     const ghost = document.createElement("div");
     ghost.className = "meeple-drag-ghost";
@@ -1435,6 +1469,9 @@ function attachMeepleDrag(el, state) {
       // player's actual room position, only the laser-damage mark.
       const laserZone = under.closest(".laser-mark-zone");
       if (laserZone) return { kind: "laser", el: laserZone };
+      // Same idea as the 102 zone above, for 201 (基因库)'s stat bonus.
+      const geneZone = under.closest(".gene-mark-zone");
+      if (geneZone) return { kind: "gene", el: geneZone };
       const room = under.closest(".room");
       if (room && !TRANSIT_ROOM_IDS.includes(room.dataset.roomId)) {
         return { kind: "room", el: room, room: room.dataset.roomId };
@@ -1468,14 +1505,26 @@ function attachMeepleDrag(el, state) {
       const target = findDropTarget(ev.clientX, ev.clientY);
       if (target && target.kind === "room") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: target.room, password: adminPassword });
-        // 102 (激光室)'s damage is a separate manual flag on top of the
-        // normal move -- always relocate them there, then ask separately
-        // whether to also mark this round's laser damage.
+        // 102 (激光室)/201 (基因库)'s effects are a separate manual flag on
+        // top of the normal move -- always relocate them there, then ask
+        // separately whether to also mark this round's effect.
         if (target.room === "102") openLaserMarkConfirmModal(playerId, "stop", state);
+        else if (target.room === "201") openGeneMarkConfirmModal(playerId, "stop", state);
+        // Leaving 201 for somewhere else -- offer to undo an existing mark
+        // rather than leaving it stuck on someone no longer there (they can
+        // also just click the badge directly; this just meets them at the
+        // point where it's most likely to matter).
+        else if (fromRoom === "201" && state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+          openGeneMarkLeaveConfirmModal(playerId, state);
+        }
       } else if (target && target.kind === "laser") {
         // Merely passing through 102 -- no room change at all, purely a
         // laser-damage mark (see admin:setLaserMark).
         openLaserMarkConfirmModal(playerId, "pass", state);
+      } else if (target && target.kind === "gene") {
+        // Merely passing through 201 -- no room change at all, purely a
+        // stat-bonus mark (see admin:setGeneMark).
+        openGeneMarkConfirmModal(playerId, "pass", state);
       } else if (target && target.kind === "floor") {
         const votingPlayer = state.players.find((p) => p.id === playerId);
         if (votingPlayer && votingPlayer.health <= 0) {
@@ -1491,6 +1540,9 @@ function attachMeepleDrag(el, state) {
         }
       } else if (target && target.kind === "tray") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: null, password: adminPassword });
+        if (fromRoom === "201" && state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+          openGeneMarkLeaveConfirmModal(playerId, state);
+        }
       }
     }
     window.addEventListener("pointermove", onMove);
@@ -1917,6 +1969,67 @@ function openLaserMarkConfirmModal(playerId, kind, state) {
   });
 }
 
+// 201 (基因库)'s "三项属性各永久+1" -- same manual-marking model as 102
+// above (stop in the room, or pass through its dedicated zone).
+function openGeneMarkConfirmModal(playerId, kind, state) {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return;
+  if (player.health <= 0) {
+    showAdminToast(`玩家 ${playerId} 已成为暗影，不再受基因库影响`);
+    return;
+  }
+  const existing = state.geneMarks && state.geneMarks[playerId];
+  if (existing && existing.round === state.round) {
+    showAdminToast(`玩家 ${playerId} 本轮已标记过 201 基因库`);
+    return;
+  }
+  const verb = kind === "stop" ? "停留在" : "经过";
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info gene-mark-modal">
+      <div class="modal-title">🧬 201 基因库</div>
+      <div style="margin:12px 0;font-size:14px;">玩家 ${playerId} 本轮${verb} 201 基因库，是否标记三项属性（武力/速度/负重）各 +1？</div>
+      <div class="modal-actions">
+        <button class="btn secondary gene-mark-cancel">不标记</button>
+        <button class="btn gene-mark-confirm">标记 +1+1+1</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".gene-mark-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".gene-mark-confirm").addEventListener("click", () => {
+    socket.send({ type: "admin:setGeneMark", playerId, action: "add", password: adminPassword });
+    close();
+  });
+}
+
+// Offered when dragging an already-marked player OUT of 201 -- they can
+// also just click the badge directly, this just meets admin at the point
+// where undoing the mark is most likely to be the intent.
+function openGeneMarkLeaveConfirmModal(playerId, state) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info gene-mark-modal">
+      <div class="modal-title">🧬 201 基因库</div>
+      <div style="margin:12px 0;font-size:14px;">玩家 ${playerId} 已离开 201 基因库，是否取消本轮已标记的三项属性 +1？</div>
+      <div class="modal-actions">
+        <button class="btn secondary gene-mark-keep">保留标记</button>
+        <button class="btn gene-mark-remove">取消标记</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".gene-mark-keep").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".gene-mark-remove").addEventListener("click", () => {
+    socket.send({ type: "admin:setGeneMark", playerId, action: "remove", password: adminPassword });
+    close();
+  });
+}
+
 // Human-readable label for one playerLogs entry's source/detail — mirrors
 // the wording used in the settlement accordions themselves so admin can
 // cross-reference a log line against what they saw while settling that round.
@@ -1966,6 +2079,7 @@ function playerLogSourceLabelBase(entry) {
     }
     case "revival": return `暗影复活 · 吸收 ${entry.detail.absorbed}${entry.detail.revived ? "（已复活）" : "（尚未复活）"}`;
     case "laser102": return "102 激光室 · 经过/停留（管理员标记）";
+    case "gene201": return "201 基因库 · 经过/停留（管理员标记，三项属性各+1）";
     case "manual": return "管理员手动调整";
     default: return entry.source;
   }

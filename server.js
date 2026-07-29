@@ -76,6 +76,11 @@ function defaultState() {
     // healthBefore, roomBefore } per marked player id, kept only so
     // "cancel" can undo it exactly; cleared every round the same way.
     laserMarks: {},
+    // 201 (基因库)'s "三项属性各永久+1" -- same manual-marking model as
+    // laserMarks above (stop in the room, or pass through its dedicated
+    // zone; see admin:setGeneMark), just stats instead of health/room:
+    // { round, statsBefore } per marked player id.
+    geneMarks: {},
     // Settlement-phase draft — null outside of settlement. See
     // startSettlementDraft() for the shape. `working` holds player
     // health/stats as sections get committed; this is broadcast to every
@@ -1050,6 +1055,7 @@ wss.on("connection", (ws) => {
           rocketTargetRoom: null,
           chemistAction: null,
           laserMarks: {},
+          geneMarks: {},
           settlementDraft: null,
           playerLogs: {},
           timer: state.timer,
@@ -1200,6 +1206,7 @@ wss.on("connection", (ws) => {
               state.rocketTargetRoom = null;
               state.chemistAction = null;
               state.laserMarks = {};
+              state.geneMarks = {};
             }
             state.round = newRound;
           }
@@ -1374,6 +1381,51 @@ wss.on("connection", (ws) => {
         }
         break;
       }
+      // Admin manually flags 201 (基因库)'s "三项属性各永久+1" -- same model
+      // as admin:setLaserMark above (a REAL, immediate stat change, not
+      // deferred to 结算), just stats instead of health/room. "remove" is an
+      // exact undo using the pre-mark stats snapshot, plus dropping the log
+      // entry it created.
+      case "admin:setGeneMark": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        const playerId = Math.round(Number(msg.playerId));
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player) return;
+        if (msg.action === "add") {
+          const existing = state.geneMarks[playerId];
+          if (existing && existing.round === state.round) return; // already marked this round
+          if (player.health <= 0) return; // a Shadow gains nothing here either
+          const statsBefore = { ...player.stats };
+          player.stats.power = (player.stats.power || 0) + 1;
+          player.stats.speed = (player.stats.speed || 0) + 1;
+          player.stats.weight = (player.stats.weight || 0) + 1;
+          state.geneMarks[playerId] = { round: state.round, statsBefore };
+          addPlayerLog(state, playerId, {
+            round: state.round,
+            source: "gene201",
+            detail: {},
+            room: "201",
+            healthBefore: player.health,
+            healthAfter: player.health,
+            healthDelta: 0,
+            statDeltas: { power: 1, speed: 1, weight: 1 },
+          });
+        } else if (msg.action === "remove") {
+          const mark = state.geneMarks[playerId];
+          if (!mark || mark.round !== state.round) return;
+          player.stats = { ...mark.statsBefore };
+          delete state.geneMarks[playerId];
+          const logs = state.playerLogs[String(playerId)];
+          if (logs) {
+            const idx = logs.findIndex((e) => e.round === state.round && e.source === "gene201");
+            if (idx !== -1) logs.splice(idx, 1);
+          }
+        } else {
+          return;
+        }
+        break;
+      }
       // Idempotent: creates a fresh draft only if none exists for this round
       // yet, otherwise leaves whatever's already in progress untouched — so
       // re-entering settlement after "取消结算" (a client-side-only exit,
@@ -1503,6 +1555,7 @@ wss.on("connection", (ws) => {
         state.rocketTargetRoom = null;
         state.chemistAction = null;
         state.laserMarks = {};
+        state.geneMarks = {};
         // Round 0's settlement is what actually starts the game -- there's
         // no separate admin:startGame anymore, so finishing it here both
         // applies its one-off effects and flips Prep -> in_progress, right
