@@ -1542,22 +1542,28 @@ function attachMeepleDrag(el, state) {
         if (target.room === "102") {
           openLaserMarkConfirmModal(playerId, "stop", state);
         } else if (target.room === "201") {
-          openGeneMarkConfirmModal(playerId, "stop", state);
-          // 201 only connects down to the rest of the map via 102's ladder
-          // (see the map art) -- arriving from anywhere except 102 itself
-          // means this move passed through it too.
-          if (fromRoom && fromRoom !== "102") openLaserMarkConfirmModal(playerId, "pass", state);
+          // Chained (not opened together) -- 201 only connects down to the
+          // rest of the map via 102's ladder (see the map art), so arriving
+          // from anywhere except 102 itself also passes through it, but
+          // showing both confirm popups at once left a second full-screen
+          // overlay sitting invisibly behind the first if admin only
+          // noticed and dismissed the front one, silently eating every
+          // click/drag afterward since it still covered the whole screen.
+          openGeneMarkConfirmModal(playerId, "stop", state, () => {
+            if (fromRoom && fromRoom !== "102") openLaserMarkConfirmModal(playerId, "pass", state);
+          });
         } else if (fromRoom === "201") {
           // Leaving 201 for anywhere that isn't 102 also passes back
-          // through the same ladder.
-          openLaserMarkConfirmModal(playerId, "pass", state);
-          // ...and offer to undo an existing 201 mark rather than leaving it
-          // stuck on someone no longer there (they can also just click the
-          // badge directly; this just meets them at the point where it's
-          // most likely to matter).
-          if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
-            openGeneMarkLeaveConfirmModal(playerId, state);
-          }
+          // through the same ladder; once that's resolved, separately offer
+          // to undo an existing 201 mark rather than leaving it stuck on
+          // someone no longer there (they can also just click the badge
+          // directly; this just meets them at the point where it's most
+          // likely to matter).
+          openLaserMarkConfirmModal(playerId, "pass", state, () => {
+            if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+              openGeneMarkLeaveConfirmModal(playerId, state);
+            }
+          });
         }
       } else if (target && target.kind === "laser") {
         // Merely passing through 102 -- no room change at all, purely a
@@ -1583,10 +1589,11 @@ function attachMeepleDrag(el, state) {
       } else if (target && target.kind === "tray") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: null, password: adminPassword });
         if (fromRoom === "201") {
-          openLaserMarkConfirmModal(playerId, "pass", state);
-          if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
-            openGeneMarkLeaveConfirmModal(playerId, state);
-          }
+          openLaserMarkConfirmModal(playerId, "pass", state, () => {
+            if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+              openGeneMarkLeaveConfirmModal(playerId, state);
+            }
+          });
         }
       }
     }
@@ -1986,16 +1993,18 @@ function openChemistActionModal(state) {
 // see attachMeepleDrag's onUp. A REAL, immediate health change (not
 // deferred to 结算, unlike every other pre-结算 map setting above), so it's
 // confirmed here rather than applied silently on every drop.
-function openLaserMarkConfirmModal(playerId, kind, state) {
+function openLaserMarkConfirmModal(playerId, kind, state, onDone) {
   const player = state.players.find((p) => p.id === playerId);
-  if (!player) return;
+  if (!player) { if (onDone) onDone(); return; }
   if (player.health <= 0) {
     showAdminToast(`玩家 ${playerId} 已成为暗影，不再受激光室影响`);
+    if (onDone) onDone();
     return;
   }
   const existing = state.laserMarks && state.laserMarks[playerId];
   if (existing && existing.round === state.round) {
     showAdminToast(`玩家 ${playerId} 本轮已标记过 102 激光室`);
+    if (onDone) onDone();
     return;
   }
   const verb = kind === "stop" ? "停留在" : "经过";
@@ -2011,7 +2020,12 @@ function openLaserMarkConfirmModal(playerId, kind, state) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  function close() { document.body.removeChild(overlay); }
+  // Only ONE of these mark-confirm modals is ever open at a time (see
+  // onUp's chaining via onDone) -- two stacked full-screen overlays used to
+  // leave the SECOND one sitting invisibly behind the first if admin only
+  // noticed and dismissed the front one, silently eating every click/drag
+  // afterward since it still covered the whole screen.
+  function close() { document.body.removeChild(overlay); if (onDone) onDone(); }
   overlay.querySelector(".laser-mark-cancel").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector(".laser-mark-confirm").addEventListener("click", () => {
@@ -2022,16 +2036,18 @@ function openLaserMarkConfirmModal(playerId, kind, state) {
 
 // 201 (基因库)'s "三项属性各永久+1" -- same manual-marking model as 102
 // above (stop in the room, or pass through its dedicated zone).
-function openGeneMarkConfirmModal(playerId, kind, state) {
+function openGeneMarkConfirmModal(playerId, kind, state, onDone) {
   const player = state.players.find((p) => p.id === playerId);
-  if (!player) return;
+  if (!player) { if (onDone) onDone(); return; }
   if (player.health <= 0) {
     showAdminToast(`玩家 ${playerId} 已成为暗影，不再受基因库影响`);
+    if (onDone) onDone();
     return;
   }
   const existing = state.geneMarks && state.geneMarks[playerId];
   if (existing && existing.round === state.round) {
     showAdminToast(`玩家 ${playerId} 本轮已标记过 201 基因库`);
+    if (onDone) onDone();
     return;
   }
   const verb = kind === "stop" ? "停留在" : "经过";
@@ -2047,7 +2063,7 @@ function openGeneMarkConfirmModal(playerId, kind, state) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  function close() { document.body.removeChild(overlay); }
+  function close() { document.body.removeChild(overlay); if (onDone) onDone(); }
   overlay.querySelector(".gene-mark-cancel").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector(".gene-mark-confirm").addEventListener("click", () => {
@@ -2059,7 +2075,7 @@ function openGeneMarkConfirmModal(playerId, kind, state) {
 // Offered when dragging an already-marked player OUT of 201 -- they can
 // also just click the badge directly, this just meets admin at the point
 // where undoing the mark is most likely to be the intent.
-function openGeneMarkLeaveConfirmModal(playerId, state) {
+function openGeneMarkLeaveConfirmModal(playerId, state, onDone) {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
@@ -2072,7 +2088,7 @@ function openGeneMarkLeaveConfirmModal(playerId, state) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  function close() { document.body.removeChild(overlay); }
+  function close() { document.body.removeChild(overlay); if (onDone) onDone(); }
   overlay.querySelector(".gene-mark-keep").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector(".gene-mark-remove").addEventListener("click", () => {
