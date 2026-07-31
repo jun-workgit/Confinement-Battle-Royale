@@ -1517,6 +1517,41 @@ wss.on("connection", (ws) => {
         }
         break;
       }
+      // B304 (操作室)'s "可立即重新分配自己的基因点数" -- same fixed 10-point
+      // pool as the player's own initial allocation (see
+      // clampPlayerStats/user:setStats), just triggered mid-game via admin
+      // dragging them into the room, since user:setStats itself only
+      // accepts edits during prep. A full reallocation, not a delta, so
+      // there's no "undo" state to track like laserMarks/geneMarks above --
+      // just logged (as whatever the net stat deltas end up being) for the
+      // audit trail.
+      case "admin:reallocatePlayerStats": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        const playerId = Math.round(Number(msg.playerId));
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player) return;
+        if (player.health <= 0) return; // a Shadow has no gene points left to reallocate
+        const newStats = clampPlayerStats(msg.stats);
+        const statDeltas = {};
+        for (const id of STAT_IDS) {
+          if (newStats[id] !== player.stats[id]) statDeltas[id] = newStats[id] - player.stats[id];
+        }
+        if (Object.keys(statDeltas).length) {
+          addPlayerLog(state, playerId, {
+            round: state.round,
+            source: "b304",
+            detail: {},
+            room: "B304",
+            healthBefore: player.health,
+            healthAfter: player.health,
+            healthDelta: 0,
+            statDeltas,
+          });
+        }
+        player.stats = newStats;
+        break;
+      }
       // Idempotent: creates a fresh draft only if none exists for this round
       // yet, otherwise leaves whatever's already in progress untouched — so
       // re-entering settlement after "取消结算" (a client-side-only exit,

@@ -1583,18 +1583,30 @@ function attachMeepleDrag(el, state) {
           openGeneMarkConfirmModal(playerId, "stop", state, () => {
             if (fromRoom && fromRoom !== "102") openLaserMarkConfirmModal(playerId, "pass", state);
           });
-        } else if (fromRoom === "201") {
-          // Leaving 201 for anywhere that isn't 102 also passes back
-          // through the same ladder; once that's resolved, separately offer
-          // to undo an existing 201 mark rather than leaving it stuck on
-          // someone no longer there (they can also just click the badge
-          // directly; this just meets them at the point where it's most
-          // likely to matter).
-          openLaserMarkConfirmModal(playerId, "pass", state, () => {
-            if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
-              openGeneMarkLeaveConfirmModal(playerId, state);
-            }
-          });
+        } else {
+          // B304 (操作室)'s "可立即重新分配自己的基因点数" -- resolved LAST in
+          // the chain, after any leaving-201 business (if that's where they
+          // came from), so only one modal is ever on screen at a time.
+          const afterLeaving201 = () => {
+            if (target.room === "B304") openStatsReallocConfirmModal(playerId, state);
+          };
+          if (fromRoom === "201") {
+            // Leaving 201 for anywhere that isn't 102 also passes back
+            // through the same ladder; once that's resolved, separately
+            // offer to undo an existing 201 mark rather than leaving it
+            // stuck on someone no longer there (they can also just click
+            // the badge directly; this just meets them at the point where
+            // it's most likely to matter).
+            openLaserMarkConfirmModal(playerId, "pass", state, () => {
+              if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+                openGeneMarkLeaveConfirmModal(playerId, state, afterLeaving201);
+              } else {
+                afterLeaving201();
+              }
+            });
+          } else {
+            afterLeaving201();
+          }
         }
       } else if (target && target.kind === "laser") {
         // Merely passing through 102 -- no room change at all, purely a
@@ -2205,6 +2217,106 @@ function openGeneMarkLeaveConfirmModal(playerId, state, onDone) {
   });
 }
 
+// B304 (操作室)'s "可立即重新分配自己的基因点数" -- unlike 102/201, this
+// isn't a health/stat delta to mark and undo, it's a full reallocation
+// within the same fixed 10-point pool as the player's own initial
+// allocation (see clampPlayerStats), just triggered mid-game via admin
+// dragging them into the room since user:setStats itself only works
+// during prep.
+function openStatsReallocConfirmModal(playerId, state, onDone) {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) { if (onDone) onDone(); return; }
+  if (player.health <= 0) {
+    showAdminToast(`玩家 ${playerId} 已成为暗影，无法重新分配基因点数`);
+    if (onDone) onDone();
+    return;
+  }
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info stats-realloc-modal">
+      <div class="modal-title">🔧 B304 操作室</div>
+      <div style="margin:12px 0;font-size:14px;">玩家 ${playerId} 本轮停留在 B304 操作室，是否重新分配其基因点数（武力/速度/负重）？</div>
+      <div class="modal-actions">
+        <button class="btn secondary stats-realloc-decline">不分配</button>
+        <button class="btn stats-realloc-accept">重新分配</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); if (onDone) onDone(); }
+  overlay.querySelector(".stats-realloc-decline").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".stats-realloc-accept").addEventListener("click", () => {
+    document.body.removeChild(overlay);
+    openStatsReallocEditorModal(playerId, state, onDone);
+  });
+}
+
+// Same 10-point-pool stepper UI/logic as index.html's renderStatsEditor
+// (mirrored, not shared, since that one sends user:setStats and lives in a
+// completely separate view) -- edits stay local to this modal's own draft
+// until "保存" sends the whole reallocation at once.
+function renderStatsReallocBody(bodyEl, draftStats) {
+  const sum = STAT_DEFS.reduce((s, d) => s + (draftStats[d.id] || 0), 0);
+  const left = STAT_POINTS_TOTAL - sum;
+  bodyEl.innerHTML = `
+    <div class="points-left ${left === 0 ? "zero" : ""}" style="margin-left:0;margin-bottom:10px;">剩余点数：${left} / ${STAT_POINTS_TOTAL}</div>
+    ${STAT_DEFS.map((d) => {
+      const v = draftStats[d.id] || 0;
+      const pct = (v / STAT_POINTS_TOTAL) * 100;
+      return `
+      <div class="stat-row-v2">
+        <div class="diamond-badge"><span>${d.icon}</span></div>
+        <div class="stat-row-v2-body">
+          <div class="stat-row-v2-label">${d.label}</div>
+          <div class="stat-bar-track"><div class="stat-bar-thumb" style="left:${pct}%;"></div></div>
+        </div>
+        <div class="stat-row-v2-steppers">
+          <button class="stepper-btn sm" data-action="dec" data-stat="${d.id}" ${v <= 0 ? "disabled" : ""}>－</button>
+          <div class="stat-row-v2-value compact">${v}</div>
+          <button class="stepper-btn sm" data-action="inc" data-stat="${d.id}" ${left <= 0 ? "disabled" : ""}>＋</button>
+        </div>
+      </div>`;
+    }).join("")}
+  `;
+  bodyEl.querySelectorAll(".stepper-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const statId = btn.dataset.stat;
+      const delta = btn.dataset.action === "inc" ? 1 : -1;
+      const others = STAT_DEFS.filter((d) => d.id !== statId).reduce((s, d) => s + (draftStats[d.id] || 0), 0);
+      const maxAllowed = STAT_POINTS_TOTAL - others;
+      draftStats[statId] = Math.min(maxAllowed, Math.max(0, (draftStats[statId] || 0) + delta));
+      renderStatsReallocBody(bodyEl, draftStats);
+    });
+  });
+}
+
+function openStatsReallocEditorModal(playerId, state, onDone) {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) { if (onDone) onDone(); return; }
+  const draftStats = { ...player.stats };
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card room-info stats-realloc-modal">
+      <div class="modal-title">🔧 B304 操作室 · 玩家 ${playerId} 重新分配基因点数</div>
+      <div id="stats-realloc-body"></div>
+      <div class="modal-actions">
+        <button class="btn secondary stats-realloc-cancel">取消</button>
+        <button class="btn stats-realloc-save">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  renderStatsReallocBody(overlay.querySelector("#stats-realloc-body"), draftStats);
+  function close() { document.body.removeChild(overlay); if (onDone) onDone(); }
+  overlay.querySelector(".stats-realloc-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".stats-realloc-save").addEventListener("click", () => {
+    socket.send({ type: "admin:reallocatePlayerStats", playerId, stats: draftStats, password: adminPassword });
+    close();
+  });
+}
+
 // B101 (控制室)'s function 2: "选择一个'毒气'房间永久'解毒'...从当轮开始，
 // 停留在该房间的玩家均不受'毒气'伤害" -- right-click any room to toggle this,
 // admin-only and never shown to public/player views (the room's own rule
@@ -2294,6 +2406,7 @@ function playerLogSourceLabelBase(entry) {
     case "revival": return `暗影复活 · 吸收 ${entry.detail.absorbed}${entry.detail.revived ? "（已复活）" : "（尚未复活）"}`;
     case "laser102": return "102 激光室 · 经过/停留（管理员标记）";
     case "gene201": return "201 基因库 · 经过/停留（管理员标记，三项属性各+1）";
+    case "b304": return "B304 操作室 · 重新分配基因点数";
     case "manual": return "管理员手动调整";
     default: return entry.source;
   }
