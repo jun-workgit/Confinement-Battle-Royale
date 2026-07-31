@@ -2256,14 +2256,17 @@ function openStatsReallocConfirmModal(playerId, state, onDone) {
 // (mirrored, not shared, since that one sends user:setStats and lives in a
 // completely separate view) -- edits stay local to this modal's own draft
 // until "保存" sends the whole reallocation at once.
+// Unlike the player's own initial allocation (index.html's renderStatsEditor,
+// bound by the 10-point pool), B304's reallocation has no upper cap at all --
+// each stepper just increments/decrements freely (floor of 0), matching
+// clampAdminStats server-side rather than clampPlayerStats.
 function renderStatsReallocBody(bodyEl, draftStats) {
   const sum = STAT_DEFS.reduce((s, d) => s + (draftStats[d.id] || 0), 0);
-  const left = STAT_POINTS_TOTAL - sum;
   bodyEl.innerHTML = `
-    <div class="points-left ${left === 0 ? "zero" : ""}" style="margin-left:0;margin-bottom:10px;">剩余点数：${left} / ${STAT_POINTS_TOTAL}</div>
+    <div class="points-left" style="margin-left:0;margin-bottom:10px;">当前总计：${sum}（B304 重新分配不受常规10点上限限制）</div>
     ${STAT_DEFS.map((d) => {
       const v = draftStats[d.id] || 0;
-      const pct = (v / STAT_POINTS_TOTAL) * 100;
+      const pct = Math.min(100, (v / STAT_POINTS_TOTAL) * 100);
       return `
       <div class="stat-row-v2">
         <div class="diamond-badge"><span>${d.icon}</span></div>
@@ -2274,7 +2277,7 @@ function renderStatsReallocBody(bodyEl, draftStats) {
         <div class="stat-row-v2-steppers">
           <button class="stepper-btn sm" data-action="dec" data-stat="${d.id}" ${v <= 0 ? "disabled" : ""}>－</button>
           <div class="stat-row-v2-value compact">${v}</div>
-          <button class="stepper-btn sm" data-action="inc" data-stat="${d.id}" ${left <= 0 ? "disabled" : ""}>＋</button>
+          <button class="stepper-btn sm" data-action="inc" data-stat="${d.id}">＋</button>
         </div>
       </div>`;
     }).join("")}
@@ -2283,9 +2286,7 @@ function renderStatsReallocBody(bodyEl, draftStats) {
     btn.addEventListener("click", () => {
       const statId = btn.dataset.stat;
       const delta = btn.dataset.action === "inc" ? 1 : -1;
-      const others = STAT_DEFS.filter((d) => d.id !== statId).reduce((s, d) => s + (draftStats[d.id] || 0), 0);
-      const maxAllowed = STAT_POINTS_TOTAL - others;
-      draftStats[statId] = Math.min(maxAllowed, Math.max(0, (draftStats[statId] || 0) + delta));
+      draftStats[statId] = Math.max(0, (draftStats[statId] || 0) + delta);
       renderStatsReallocBody(bodyEl, draftStats);
     });
   });

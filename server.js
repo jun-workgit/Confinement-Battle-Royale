@@ -1532,7 +1532,10 @@ wss.on("connection", (ws) => {
         const player = state.players.find((p) => p.id === playerId);
         if (!player) return;
         if (player.health <= 0) return; // a Shadow has no gene points left to reallocate
-        const newStats = clampPlayerStats(msg.stats);
+        // Unlike the player's own initial allocation (clampPlayerStats),
+        // B304's reallocation isn't bound by the normal 10-point pool --
+        // only non-negative integers are enforced here.
+        const newStats = clampAdminStats(msg.stats);
         const statDeltas = {};
         for (const id of STAT_IDS) {
           if (newStats[id] !== player.stats[id]) statDeltas[id] = newStats[id] - player.stats[id];
