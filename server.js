@@ -81,6 +81,16 @@ function defaultState() {
     // zone; see admin:setGeneMark), just stats instead of health/room:
     // { round, statsBefore } per marked player id.
     geneMarks: {},
+    // B101 (控制室)'s function 2: "选择一个'毒气'房间永久'解毒'...从当轮开始，
+    // 停留在该房间的玩家均不受'毒气'伤害" -- a room in this list is immune to
+    // poison damage forever regardless of its floor's status (see
+    // isRoomPoisoned), set via admin:setRoomDetox. Deliberately admin-only
+    // and never surfaced to index.html/public.html -- "不会被公示" (never
+    // publicly announced) is the room's own rule text, not just an app
+    // convenience, so the client code for those two views must never read
+    // or render this field even though (like hackerRoomMark) it's still
+    // physically present in the broadcast state.
+    detoxifiedRooms: [],
     // Settlement-phase draft — null outside of settlement. See
     // startSettlementDraft() for the shape. `working` holds player
     // health/stats as sections get committed; this is broadcast to every
@@ -251,8 +261,11 @@ function roomFloor(roomId) {
 // Most rooms sit wholly within one floor band, so "poisoned" just means
 // their one floor is poisoned. A room in MULTI_FLOOR_ROOMS (currently only
 // B501) only counts as poisoned once EVERY floor it spans is -- players can
-// otherwise retreat to whichever half of the room isn't gassed.
-function isRoomPoisoned(roomId, poisonedFloors) {
+// otherwise retreat to whichever half of the room isn't gassed. A room in
+// `detoxifiedRooms` (B101 控制室's function 2 -- see admin:setRoomDetox)
+// overrides this entirely: permanently immune regardless of floor state.
+function isRoomPoisoned(roomId, poisonedFloors, detoxifiedRooms) {
+  if (detoxifiedRooms && detoxifiedRooms.includes(roomId)) return false;
   const floors = MULTI_FLOOR_ROOMS[roomId] || [roomFloor(roomId)];
   return floors.length > 0 && floors.every((f) => f && poisonedFloors.includes(f));
 }
@@ -588,7 +601,7 @@ function commitSectionEffect(section, data, working, state) {
       const realPlayer = state.players.find((pp) => pp.id === p.id);
       const justRevived = realPlayer && realPlayer.revivedProtectedRound === state.round;
       if (justRevived) continue;
-      if (!isRoomPoisoned(p.room, data.floors)) continue;
+      if (!isRoomPoisoned(p.room, data.floors, state.detoxifiedRooms)) continue;
       if (playerItems(state, p.id).gasMask) {
         poisonGasMaskImmune.push(p.id); // took no damage, but admin still wants a log record of why
         continue;
@@ -604,7 +617,7 @@ function commitSectionEffect(section, data, working, state) {
       // (not just trusted from when admin picked it) since eligibility can
       // shift between then and when this section actually commits.
       let damage = baseDamage;
-      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room && isRoomPoisoned(chemistAction.room, state.poisonFloors)) {
+      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room && isRoomPoisoned(chemistAction.room, state.poisonFloors, state.detoxifiedRooms)) {
         damage = Math.max(0, damage - 2);
         chemistAdjusted[p.id] = -2;
       } else if (chemistAction && chemistAction.type === "boost") {
@@ -1070,6 +1083,7 @@ wss.on("connection", (ws) => {
           chemistAction: null,
           laserMarks: {},
           geneMarks: {},
+          detoxifiedRooms: [],
           settlementDraft: null,
           playerLogs: {},
           timer: state.timer,
@@ -1320,6 +1334,24 @@ wss.on("connection", (ws) => {
         }
         break;
       }
+      // Admin right-clicks a room on the 地图 tab to toggle B101 (控制室)'s
+      // function 2 -- unlike every other manual mark in this app, this one
+      // is PERMANENT (no per-round reset) and admin-only by design (see
+      // detoxifiedRooms' own comment), so it's just a plain add/remove on
+      // that list, no round/health/room bookkeeping needed. Locked the same
+      // way as the other map controls once 结算 has opened for the round.
+      case "admin:setRoomDetox": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        if (!ROOM_IDS.has(msg.room)) return;
+        const idx = state.detoxifiedRooms.indexOf(msg.room);
+        if (msg.detoxified) {
+          if (idx === -1) state.detoxifiedRooms.push(msg.room);
+        } else if (idx !== -1) {
+          state.detoxifiedRooms.splice(idx, 1);
+        }
+        break;
+      }
       // Admin sets/clears 化学家's "毒性调和" for this round from the 地图 tab
       // (same pre-结算 timing as floorVotes/setRocketTarget above -- frozen
       // into the poison section's default once 结算 opens, see
@@ -1338,7 +1370,7 @@ wss.on("connection", (ws) => {
           state.chemistAction = { type: "boost" };
         } else if (msg.action && msg.action.type === "reduce") {
           if (!ROOM_IDS.has(msg.action.room)) return;
-          if (!isRoomPoisoned(msg.action.room, state.poisonFloors)) return; // must already be poisoned
+          if (!isRoomPoisoned(msg.action.room, state.poisonFloors, state.detoxifiedRooms)) return; // must already be poisoned
           state.chemistAction = { type: "reduce", room: msg.action.room };
         } else {
           return;

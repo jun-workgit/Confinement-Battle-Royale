@@ -232,8 +232,10 @@ function roomFloorClient(roomId) {
 
 // Mirrors server.js's isRoomPoisoned() -- B501 spans two floor bands on the
 // map (see MULTI_FLOOR_ROOMS in map-data.js), so it only counts as poisoned
-// once every floor it spans is.
-function isRoomPoisonedClient(roomId, poisonedFloors) {
+// once every floor it spans is. A detoxified room (B101 控制室's function 2)
+// overrides this entirely, regardless of floor state.
+function isRoomPoisonedClient(roomId, poisonedFloors, detoxifiedRooms) {
+  if (detoxifiedRooms && detoxifiedRooms.includes(roomId)) return false;
   const floors = MULTI_FLOOR_ROOMS[roomId] || [roomFloorClient(roomId)];
   return floors.length > 0 && floors.every((f) => f && poisonedFloors.includes(f));
 }
@@ -374,14 +376,14 @@ function previewSectionDeltas(key, sec, draft, state) {
       if (p.health <= 0) continue;
       const realPlayer = state.players.find((pp) => pp.id === p.id);
       if (realPlayer && realPlayer.revivedProtectedRound === state.round) continue;
-      if (!isRoomPoisonedClient(p.room, sec.data.floors) || playerItemsClient(state, p.id).gasMask) continue;
+      if (!isRoomPoisonedClient(p.room, sec.data.floors, state.detoxifiedRooms) || playerItemsClient(state, p.id).gasMask) continue;
       // Mirrors server.js's commitSectionEffect exactly -- "reduce" only
       // matters for a room whose floor was ALREADY poisoned coming into this
       // round (state.poisonFloors, untouched until this section commits);
       // "boost" applies to every floor that newly becomes poisoned THIS
       // round, no target needed.
       let damage = baseDamage;
-      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room && isRoomPoisonedClient(chemistAction.room, state.poisonFloors)) {
+      if (chemistAction && chemistAction.type === "reduce" && chemistAction.room === p.room && isRoomPoisonedClient(chemistAction.room, state.poisonFloors, state.detoxifiedRooms)) {
         damage = Math.max(0, damage - 2);
         chemistAdjusted.set(p.id, -2);
       } else if (chemistAction && chemistAction.type === "boost") {
@@ -705,7 +707,7 @@ function chemistActionSummaryHtml(sec, state) {
 function renderPoisonSection(container, sec, draft, deltas, state) {
   const floors = sec.data.floors; // all currently-active poison floors -- this is what deals damage below
   const newFloors = sec.data.newFloors || [];
-  const affected = draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors));
+  const affected = draft.working.filter((p) => p.health > 0 && isRoomPoisonedClient(p.room, floors, state.detoxifiedRooms));
   const tallyEntries = Object.entries(sec.data.tally);
   container.innerHTML = `
     <div style="margin-bottom:8px;font-size:14px;">投票结果：${tallyEntries.length ? tallyEntries.map(([f, c]) => `${f} 楼（${c} 票）`).join("，") : "本轮无人投票"}</div>
@@ -1261,6 +1263,7 @@ function renderDashboard(state) {
           ${isEditing ? "点击左侧楼层标签以激活/解除该层中毒（需点击“确认”生效）" : "点击上方“编辑”以修改中毒楼层"}
           · 拖动玩家图标到房间中标记位置（立即生效，拖回下方框内可移除）
           · 拖动玩家图标到左侧楼层标签记录本轮投毒意向（每人限1票，会覆盖其上一票；点击票数圆点可取消）
+          · 右键点击房间可切换该房间的永久"解毒"状态（B101 控制室功能，仅管理员可见）
         </div>`}
         ${hackerMark ? `<div style="font-size:13px;color:#ff8a80;margin-bottom:12px;">黑客本轮秘密关闭：<b>${getRoomLabel(hackerMark.room)}</b>（仅黑客本人与管理员可见）</div>` : ""}
         ${opinionLeader ? `<div style="font-size:13px;color:#d8b258;margin-bottom:12px;">意见领袖（玩家 ${opinionLeader.id}）额外票数：${floorVoteUsedFor(opinionLeader, state)}/${floorVoteCapFor(opinionLeader, state) - 1}（每次拖动其图标到楼层再投1票，含首票共上限 ${floorVoteCapFor(opinionLeader, state)} 票）</div>` : ""}
@@ -1300,6 +1303,12 @@ function renderDashboard(state) {
     if (state.rocketTargetRoom) {
       const rocketEl = poisonMapEl.querySelector(`.room[data-room-id="${state.rocketTargetRoom}"]`);
       if (rocketEl) rocketEl.classList.add("room-rocket-target");
+    }
+    // B101 (控制室)'s function 2 -- admin-only marker (never rendered in
+    // index.html/public.html, see detoxifiedRooms' own comment in server.js).
+    for (const room of state.detoxifiedRooms || []) {
+      const detoxEl = poisonMapEl.querySelector(`.room[data-room-id="${room}"]`);
+      if (detoxEl) detoxEl.classList.add("room-detoxified");
     }
     renderFloorVoteBadges(poisonMapEl, state, settlementLocked);
     renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
@@ -1379,6 +1388,15 @@ function renderDashboard(state) {
           socket.send({ type: "admin:setChemistAction", action: null, password: adminPassword });
         });
       }
+      // B101 (控制室)'s function 2 -- right-click any room to toggle its
+      // permanent detox, admin-only (see detoxifiedRooms' own comment).
+      poisonMapEl.querySelectorAll(".room[data-room-id]").forEach((el) => {
+        if (TRANSIT_ROOM_IDS.includes(el.dataset.roomId)) return;
+        el.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          openRoomDetoxConfirmModal(el.dataset.roomId, state);
+        });
+      });
     } else {
       tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => el.classList.add("locked"));
     }
@@ -1930,7 +1948,7 @@ function openInventoryModal(p, state) {
 // round's vote ends up newly poisoning, decided later at 结算.
 function openChemistActionModal(state) {
   const current = state.chemistAction;
-  const eligibleRooms = STOPPABLE_ROOM_IDS.filter((r) => isRoomPoisonedClient(r, state.poisonFloors));
+  const eligibleRooms = STOPPABLE_ROOM_IDS.filter((r) => isRoomPoisonedClient(r, state.poisonFloors, state.detoxifiedRooms));
   let type = current ? current.type : "";
   let room = current && current.type === "reduce" ? current.room : (eligibleRooms[0] || "");
 
@@ -2093,6 +2111,45 @@ function openGeneMarkLeaveConfirmModal(playerId, state, onDone) {
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector(".gene-mark-remove").addEventListener("click", () => {
     socket.send({ type: "admin:setGeneMark", playerId, action: "remove", password: adminPassword });
+    close();
+  });
+}
+
+// B101 (控制室)'s function 2: "选择一个'毒气'房间永久'解毒'...从当轮开始，
+// 停留在该房间的玩家均不受'毒气'伤害" -- right-click any room to toggle this,
+// admin-only and never shown to public/player views (the room's own rule
+// text says "不会被公示" -- never publicly announced -- this isn't just an
+// app convenience). Permanent, unlike every other manual mark in this app:
+// no per-round reset, no health/room bookkeeping, just add/remove on the
+// list (see admin:setRoomDetox).
+function openRoomDetoxConfirmModal(room, state) {
+  const already = (state.detoxifiedRooms || []).includes(room);
+  const label = getRoomLabel(room);
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = already ? `
+    <div class="modal-card room-info room-detox-modal">
+      <div class="modal-title">☣️ B101 控制室</div>
+      <div style="margin:12px 0;font-size:14px;">${label} 已被永久解毒，是否取消解毒？（仅管理员可见，取消后该房间将恢复正常受"毒气"影响）</div>
+      <div class="modal-actions">
+        <button class="btn secondary room-detox-cancel">保持解毒</button>
+        <button class="btn room-detox-confirm">取消解毒</button>
+      </div>
+    </div>` : `
+    <div class="modal-card room-info room-detox-modal">
+      <div class="modal-title">☣️ B101 控制室</div>
+      <div style="margin:12px 0;font-size:14px;">是否将 ${label} 永久解毒？解毒后该房间从本轮起不再受"毒气"伤害，此设置仅管理员可见，不会公示给玩家。</div>
+      <div class="modal-actions">
+        <button class="btn secondary room-detox-cancel">取消</button>
+        <button class="btn room-detox-confirm">永久解毒</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector(".room-detox-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector(".room-detox-confirm").addEventListener("click", () => {
+    socket.send({ type: "admin:setRoomDetox", room, detoxified: !already, password: adminPassword });
     close();
   });
 }
