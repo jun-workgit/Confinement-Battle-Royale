@@ -1252,6 +1252,11 @@ function renderDashboard(state) {
     const chemistActionLabel = !state.chemistAction ? "未设置"
       : state.chemistAction.type === "reduce" ? `削弱：${getRoomLabel(state.chemistAction.room)}`
       : "增强：本轮新增毒气楼层+2";
+    // B101 (控制室)'s function 1 -- admin-only summary of active boosts,
+    // grouped by floor (e.g. "B3 楼 ×2、2 楼 ×1").
+    const b101Counts = {};
+    for (const floor of state.b101VoteBoosts || []) b101Counts[floor] = (b101Counts[floor] || 0) + 1;
+    const b101Summary = Object.entries(b101Counts).map(([f, c]) => `${f} 楼 ×${c}`).join("、");
     tabBody.innerHTML = `
       <div class="card">
         <div style="font-weight:700;font-size:16px;margin-bottom:4px;">楼层中毒 / 玩家位置</div>
@@ -1279,6 +1284,12 @@ function renderDashboard(state) {
           ${state.rocketTargetRoom
             ? `<span>本轮火箭筒目标：<b>${getRoomLabel(state.rocketTargetRoom)}</b></span>${settlementLocked ? "" : `<button class="btn secondary" id="rocket-cancel-btn" style="padding:4px 10px;font-size:12px;">取消</button>`}`
             : `<span style="color:#8b9482;font-size:13px;">拖动火箭图标到房间以标记本轮火箭筒目标</span>`}
+        </div>
+        <div class="rocket-tray">
+          <div class="b101-vote-icon${settlementLocked ? " locked" : ""}" id="b101-vote-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到左侧楼层标签，为本轮投票+10票（可重复使用，仅管理员可见）"}">🗳️</div>
+          ${b101Summary
+            ? `<span>B101 投票加成：<b>${b101Summary}</b>（每次+10票，点击楼层上的徽章可移除一次）</span>`
+            : `<span style="color:#8b9482;font-size:13px;">拖动🗳️图标到左侧楼层标签，为本轮投票+10票（B101 控制室功能，可重复使用，仅管理员可见）</span>`}
         </div>
         <div id="meeple-tray" class="meeple-tray"></div>
         <div id="poison-map"></div>
@@ -1311,6 +1322,7 @@ function renderDashboard(state) {
       if (detoxEl) detoxEl.classList.add("room-detoxified");
     }
     renderFloorVoteBadges(poisonMapEl, state, settlementLocked);
+    renderB101VoteBadges(poisonMapEl, state, settlementLocked);
     renderMeeples(poisonMapEl.querySelector(".map-img-wrap"), state.players);
     // 102 (激光室)'s "pass-through" drop zone -- not part of the shared
     // renderMap (this admin-only overlay has no place in the public/player
@@ -1372,6 +1384,7 @@ function renderDashboard(state) {
     if (!settlementLocked) {
       tabBody.querySelectorAll(".meeple[data-player-id]").forEach((el) => attachMeepleDrag(el, state));
       attachRocketDrag(tabBody.querySelector("#rocket-drag-icon"));
+      attachB101VoteDrag(tabBody.querySelector("#b101-vote-drag-icon"));
       const rocketCancelBtn = tabBody.querySelector("#rocket-cancel-btn");
       if (rocketCancelBtn) {
         rocketCancelBtn.addEventListener("click", () => {
@@ -1714,6 +1727,83 @@ function attachRocketDrag(el) {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   });
+}
+
+// B101 (控制室)'s function 1: "在本轮'毒气'投票中1票视为10票" -- same drag
+// mechanics as attachRocketDrag above, but the icon never "holds" a single
+// target; every drop onto a floor label is an independent +10 use (see
+// admin:addB101VoteBoost), reusable any number of times per round since
+// each player who visits B101 can trigger it.
+function attachB101VoteDrag(el) {
+  if (!el) return;
+  el.classList.add("draggable");
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    e.preventDefault();
+
+    const ghost = document.createElement("div");
+    ghost.className = "rocket-drag-ghost";
+    ghost.textContent = "🗳️";
+    ghost.style.left = e.clientX + "px";
+    ghost.style.top = e.clientY + "px";
+    document.body.appendChild(ghost);
+    el.classList.add("dragging");
+
+    let lastHover = null;
+    function findFloorTarget(x, y) {
+      const under = document.elementFromPoint(x, y);
+      if (!under) return null;
+      return under.closest(".floor-chip");
+    }
+    function onMove(ev) {
+      ghost.style.left = ev.clientX + "px";
+      ghost.style.top = ev.clientY + "px";
+      const hoverEl = findFloorTarget(ev.clientX, ev.clientY);
+      if (hoverEl !== lastHover) {
+        if (lastHover) lastHover.classList.remove("drop-hover");
+        if (hoverEl) hoverEl.classList.add("drop-hover");
+        lastHover = hoverEl;
+      }
+    }
+    function onUp(ev) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.removeChild(ghost);
+      el.classList.remove("dragging");
+      if (lastHover) lastHover.classList.remove("drop-hover");
+
+      const chip = findFloorTarget(ev.clientX, ev.clientY);
+      if (chip) {
+        socket.send({ type: "admin:addB101VoteBoost", floor: chip.dataset.floor, password: adminPassword });
+      }
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+}
+
+// Small "🗳️×N" badge on each floor label with an active B101 boost --
+// same click-to-remove pattern as the floor-vote dots, one use removed
+// per click (see admin:removeB101VoteBoost).
+function renderB101VoteBadges(mapEl, state, locked) {
+  mapEl.querySelectorAll(".b101-vote-badge").forEach((el) => el.remove());
+  const counts = {};
+  for (const floor of state.b101VoteBoosts || []) counts[floor] = (counts[floor] || 0) + 1;
+  for (const [floor, count] of Object.entries(counts)) {
+    const chip = mapEl.querySelector(`.floor-chip[data-floor="${floor}"]`);
+    if (!chip) continue;
+    const badge = document.createElement("span");
+    badge.className = `b101-vote-badge${locked ? " locked" : ""}`;
+    badge.textContent = `🗳️×${count}`;
+    badge.title = locked ? "结算阶段已锁定" : "点击移除一次 B101 投票加成";
+    chip.appendChild(badge);
+    if (!locked) {
+      badge.addEventListener("click", (e) => {
+        e.stopPropagation();
+        socket.send({ type: "admin:removeB101VoteBoost", floor, password: adminPassword });
+      });
+    }
+  }
 }
 
 function fieldStepperHtml(pid, field, value) {

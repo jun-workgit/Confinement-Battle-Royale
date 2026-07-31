@@ -91,6 +91,14 @@ function defaultState() {
     // or render this field even though (like hackerRoomMark) it's still
     // physically present in the broadcast state.
     detoxifiedRooms: [],
+    // B101 (控制室)'s function 1: "在本轮'毒气'投票中1票视为10票" -- admin
+    // drags the dedicated icon (like the Rocket Launcher's) onto a floor
+    // label once per use; each entry here is one +10 to that floor's tally
+    // (see computeSectionDefault's "poison" case), independent of anyone's
+    // own personal floor vote. Reusable any number of times per round
+    // (unlike detoxifiedRooms, this IS a per-round input -- cleared the same
+    // way floorVotes/rocketTargetRoom are).
+    b101VoteBoosts: [],
     // Settlement-phase draft — null outside of settlement. See
     // startSettlementDraft() for the shape. `working` holds player
     // health/stats as sections get committed; this is broadcast to every
@@ -411,6 +419,12 @@ function computeSectionDefault(section, working, state) {
         const voter = working.find((p) => p.id === Number(playerId));
         if (!voter || voter.health <= 0) continue; // shadows don't vote
         for (const floor of floors) tally[floor] = (tally[floor] || 0) + 1;
+      }
+      // B101 (控制室)'s function 1: "1票视为10票" -- each use (see
+      // admin:addB101VoteBoost) adds +10 to that floor's tally, independent
+      // of anyone's own personal vote above.
+      for (const floor of state.b101VoteBoosts || []) {
+        tally[floor] = (tally[floor] || 0) + 10;
       }
       const counts = Object.values(tally);
       const max = counts.length ? Math.max(...counts) : 0;
@@ -1084,6 +1098,7 @@ wss.on("connection", (ws) => {
           laserMarks: {},
           geneMarks: {},
           detoxifiedRooms: [],
+          b101VoteBoosts: [],
           settlementDraft: null,
           playerLogs: {},
           timer: state.timer,
@@ -1241,6 +1256,7 @@ wss.on("connection", (ws) => {
               state.chemistAction = null;
               state.laserMarks = {};
               state.geneMarks = {};
+              state.b101VoteBoosts = [];
             }
             state.round = newRound;
           }
@@ -1350,6 +1366,25 @@ wss.on("connection", (ws) => {
         } else if (idx !== -1) {
           state.detoxifiedRooms.splice(idx, 1);
         }
+        break;
+      }
+      // B101 (控制室)'s function 1: admin drags a dedicated icon (like the
+      // Rocket Launcher's) onto a floor label once per use -- reusable any
+      // number of times per round (each entry is independent, unlike
+      // rocketTargetRoom's single value), cleared the same way
+      // floorVotes/rocketTargetRoom are.
+      case "admin:addB101VoteBoost": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        if (!FLOOR_IDS.has(msg.floor)) return;
+        state.b101VoteBoosts.push(msg.floor);
+        break;
+      }
+      case "admin:removeB101VoteBoost": {
+        if (state.phase !== "in_progress") return;
+        if (state.settlementDraft && state.settlementDraft.round === state.round) return;
+        const idx = state.b101VoteBoosts.lastIndexOf(msg.floor);
+        if (idx !== -1) state.b101VoteBoosts.splice(idx, 1);
         break;
       }
       // Admin sets/clears 化学家's "毒性调和" for this round from the 地图 tab
@@ -1612,6 +1647,7 @@ wss.on("connection", (ws) => {
         state.chemistAction = null;
         state.laserMarks = {};
         state.geneMarks = {};
+        state.b101VoteBoosts = [];
         // Round 0's settlement is what actually starts the game -- there's
         // no separate admin:startGame anymore, so finishing it here both
         // applies its one-off effects and flips Prep -> in_progress, right

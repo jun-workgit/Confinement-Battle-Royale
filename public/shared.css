@@ -279,6 +279,27 @@ html, body {
   border: 2px solid #4caf50;
   background: rgba(76,175,80,0.18);
 }
+
+/* B101 (控制室)'s function 1 -- draggable icon (admin map, in-progress
+   only), same drag mechanics as .rocket-icon but reusable any number of
+   times per round (see attachB101VoteDrag/admin:addB101VoteBoost) instead
+   of holding a single target. */
+.b101-vote-icon {
+  font-size: 26px; line-height: 1; cursor: grab; user-select: none; touch-action: none;
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0;
+  background: rgba(216,178,88,0.15); border: 1px solid rgba(216,178,88,0.4);
+}
+.b101-vote-icon.dragging { opacity: 0.35; }
+.b101-vote-icon.locked { cursor: not-allowed; opacity: 0.5; filter: grayscale(0.4); }
+.b101-vote-badge {
+  position: absolute; top: 2px; right: 2px;
+  font-size: 9px; font-weight: 800; color: #1a1d1a;
+  background: #d8b258; border-radius: 8px; padding: 1px 4px;
+  cursor: pointer; z-index: 2;
+}
+.b101-vote-badge:hover { filter: brightness(1.15); }
+.b101-vote-badge.locked { cursor: not-allowed; }
 @keyframes rocket-target-pulse {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.4); }
