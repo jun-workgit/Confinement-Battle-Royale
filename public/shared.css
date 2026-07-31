@@ -275,14 +275,13 @@ html, body {
 }
 /* B101 (控制室)'s function 2 -- admin-only marker (never rendered in
    index.html/public.html; see detoxifiedRooms' own comment in server.js).
-   The room div paints on top of its floor's .floor-overlay.poisoned stripe
-   (later in DOM order), but at a light alpha the purple still shows through
-   underneath and reads as "still poisoned" -- opaque enough here to
-   actually cancel it out visually, since the whole point of this marker is
-   "this room, unlike the rest of its floor, is NOT affected by 毒气". */
+   renderMap already excludes this room's own range from its floor's purple
+   poison stripe entirely (see map-data.js) -- there's nothing left to
+   visually cancel out here, just a plain, light tint like every other
+   room-state marker in this file. */
 .room.room-detoxified {
   border: 2px solid #4caf50;
-  background: rgba(76,175,80,0.88);
+  background: rgba(76,175,80,0.18);
 }
 
 /* B101 (控制室)'s function 1 -- draggable icon (admin map, in-progress

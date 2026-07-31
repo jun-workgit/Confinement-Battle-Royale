@@ -1296,7 +1296,7 @@ function renderDashboard(state) {
       </div>`;
     const poisonMapEl = tabBody.querySelector("#poison-map");
     const activeFloors = isEditing ? [...draft.poisonFloors] : state.poisonFloors;
-    renderMap(poisonMapEl, activeFloors, isEditing);
+    renderMap(poisonMapEl, activeFloors, isEditing, undefined, state.detoxifiedRooms);
     if (isEditing) {
       poisonMapEl.querySelectorAll(".floor-chip").forEach((chip) => {
         chip.addEventListener("click", () => {

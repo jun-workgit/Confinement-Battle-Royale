@@ -702,8 +702,14 @@ function miniHealthBarHtml(health, threshold) {
 // `poisonFloors` is an array of floor ids currently poisoned.
 // `interactive: true` marks the floor chips as clickable (used by the admin poison control).
 // `lang` defaults to Chinese so public/admin callers are unaffected.
-function renderMap(container, poisonFloors, interactive, lang) {
+// `detoxifiedRooms` (admin.html's in-progress map only -- see its own call
+// site, never passed from index.html/public.html since it's admin-only
+// info) excludes that room's own horizontal range from its floor's poison
+// stripe entirely, rather than just painting a green tint on top of it --
+// a detoxified room reads as if the floor's "毒气" never reached it at all.
+function renderMap(container, poisonFloors, interactive, lang, detoxifiedRooms) {
   const poisoned = new Set(poisonFloors || []);
+  const detoxed = new Set(detoxifiedRooms || []);
   container.innerHTML = `
     <div class="map-scroll">
     <div class="map-wrap ${interactive ? "interactive" : ""}">
@@ -716,9 +722,35 @@ function renderMap(container, poisonFloors, interactive, lang) {
       </div>
       <div class="map-img-wrap">
         <img class="map-img" src="/assets/map.png" alt="${lang === "en" ? "Confinement Battle Royale (禁闭逃杀) Map" : "禁闭逃杀 地图"}">
-        ${FLOORS.map(
-          (f) => `<div class="floor-overlay ${poisoned.has(f.id) ? "poisoned" : ""}" style="top:${f.top}%;height:${f.height}%;"></div>`
-        ).join("")}
+        ${FLOORS.map((f) => {
+          if (!poisoned.has(f.id)) return `<div class="floor-overlay" style="top:${f.top}%;height:${f.height}%;"></div>`;
+          if (!detoxed.size) return `<div class="floor-overlay poisoned" style="top:${f.top}%;height:${f.height}%;"></div>`;
+          // A room can only ever be "wholly within one floor band" or span
+          // exactly the two it's drawn across (like B501/B4+B5) -- rather
+          // than parsing ids, this just checks real geometric overlap
+          // against THIS floor's own top/height, which naturally covers
+          // both cases without needing MULTI_FLOOR_ROOMS here at all.
+          const excluded = ROOMS.filter((r) => detoxed.has(r.id) && r.top < f.top + f.height && r.top + r.height > f.top)
+            .map((r) => [r.left, r.left + r.width])
+            .sort((a, b) => a[0] - b[0]);
+          if (!excluded.length) return `<div class="floor-overlay poisoned" style="top:${f.top}%;height:${f.height}%;"></div>`;
+          const merged = [];
+          for (const range of excluded) {
+            const last = merged[merged.length - 1];
+            if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+            else merged.push([...range]);
+          }
+          const segments = [];
+          let cursor = 0;
+          for (const [start, end] of merged) {
+            if (start > cursor) segments.push([cursor, start]);
+            cursor = Math.max(cursor, end);
+          }
+          if (cursor < 100) segments.push([cursor, 100]);
+          return segments.map(
+            ([start, end]) => `<div class="floor-overlay poisoned" style="top:${f.top}%;height:${f.height}%;left:${start}%;width:${end - start}%;"></div>`
+          ).join("");
+        }).join("")}
         ${ROOMS.map(
           (r) => `<div class="room" data-room-id="${r.id}" title="${getRoomLabel(r.id, lang)}" style="left:${r.left}%;top:${r.top}%;width:${r.width}%;height:${r.height}%;"></div>`
         ).join("")}
