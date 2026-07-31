@@ -212,15 +212,18 @@ html, body {
 .laser-mark-zone {
   position: absolute; box-sizing: border-box; border-radius: 4px;
   border: 2px dashed #ff8a80; background: rgba(214,40,57,0.12);
-  display: flex; align-items: center; justify-content: center; text-align: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  text-align: center; overflow: hidden;
   font-size: 11px; color: #ff8a80; padding: 2px;
   transition: background 0.1s ease, border-color 0.1s ease;
 }
 .laser-mark-zone.drop-hover { background: rgba(214,40,57,0.32); border-color: #ff4d4f; }
 .laser-mark-zone.locked { opacity: 0.5; filter: grayscale(0.4); }
-.laser-mark-badges {
-  position: absolute; display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 80px;
-}
+/* Marked-player badges render INSIDE their own zone (not a separate
+   absolutely-positioned sibling below it) -- with 201/102's zones stacked
+   directly on top of each other, a badge row sitting right on their shared
+   border used to read as belonging to whichever zone was underneath. */
+.zone-mark-badges { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 100%; }
 .laser-mark-dot {
   width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -236,7 +239,8 @@ html, body {
 .gene-mark-zone {
   position: absolute; box-sizing: border-box; border-radius: 4px;
   border: 2px dashed #66d9e8; background: rgba(21,170,191,0.12);
-  display: flex; align-items: center; justify-content: center; text-align: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  text-align: center; overflow: hidden;
   font-size: 11px; color: #66d9e8; padding: 2px;
   transition: background 0.1s ease, border-color 0.1s ease;
 }

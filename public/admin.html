@@ -1306,8 +1306,11 @@ function renderDashboard(state) {
     // 102 (激光室)'s "pass-through" drop zone -- not part of the shared
     // renderMap (this admin-only overlay has no place in the public/player
     // views), positioned right next to 102 itself using the same
-    // absolute-percentage technique as .room. Marked-player badges sit just
-    // below it, same click-to-remove pattern as the floor-vote dots.
+    // absolute-percentage technique as .room. Marked-player badges render
+    // INSIDE the same box (not a separate absolutely-positioned sibling
+    // below it) -- with 201's zone stacked directly above, a sibling badge
+    // row would sit right on the shared border and read as belonging to
+    // whichever zone is underneath instead of the one it's actually for.
     const mapImgWrap = poisonMapEl.querySelector(".map-img-wrap");
     if (mapImgWrap) {
       const laserZone = document.createElement("div");
@@ -1317,24 +1320,19 @@ function renderDashboard(state) {
       laserZone.style.top = "18.63%";
       laserZone.style.width = "11.29%";
       laserZone.style.height = "9.05%";
-      laserZone.textContent = "🔴 经过102";
+      const laserMarkedIds = Object.keys(state.laserMarks || {}).filter((id) => state.laserMarks[id].round === state.round);
+      laserZone.innerHTML = `
+        <span>🔴 经过102</span>
+        ${laserMarkedIds.length ? `<div class="zone-mark-badges">${laserMarkedIds.map((id) => `<span class="laser-mark-dot${settlementLocked ? " locked" : ""}" data-laser-pid="${id}" title="${settlementLocked ? "结算阶段已锁定" : "点击取消该玩家本轮的102激光标记"}" style="background:${meepleColor(Number(id))};">${id}</span>`).join("")}</div>` : ""}
+      `;
       mapImgWrap.appendChild(laserZone);
-
-      const markedIds = Object.keys(state.laserMarks || {}).filter((id) => state.laserMarks[id].round === state.round);
-      if (markedIds.length) {
-        const laserBadges = document.createElement("div");
-        laserBadges.className = "laser-mark-badges";
-        laserBadges.style.left = "46.08%";
-        laserBadges.style.top = "calc(18.63% + 9.05% + 2px)";
-        laserBadges.innerHTML = markedIds.map((id) => `<span class="laser-mark-dot${settlementLocked ? " locked" : ""}" data-laser-pid="${id}" title="${settlementLocked ? "结算阶段已锁定" : "点击取消该玩家本轮的102激光标记"}" style="background:${meepleColor(Number(id))};">${id}</span>`).join("");
-        mapImgWrap.appendChild(laserBadges);
-        if (!settlementLocked) {
-          laserBadges.querySelectorAll(".laser-mark-dot[data-laser-pid]").forEach((dot) => {
-            dot.addEventListener("click", () => {
-              socket.send({ type: "admin:setLaserMark", playerId: Number(dot.dataset.laserPid), action: "remove", password: adminPassword });
-            });
+      if (!settlementLocked) {
+        laserZone.querySelectorAll(".laser-mark-dot[data-laser-pid]").forEach((dot) => {
+          dot.addEventListener("click", (e) => {
+            e.stopPropagation();
+            socket.send({ type: "admin:setLaserMark", playerId: Number(dot.dataset.laserPid), action: "remove", password: adminPassword });
           });
-        }
+        });
       }
 
       // Same idea, for 201 (基因库)'s stat bonus -- stacked directly above
@@ -1346,24 +1344,19 @@ function renderDashboard(state) {
       geneZone.style.top = "8.22%";
       geneZone.style.width = "11.29%";
       geneZone.style.height = "10.41%";
-      geneZone.textContent = "🧬 经过201";
-      mapImgWrap.appendChild(geneZone);
-
       const geneMarkedIds = Object.keys(state.geneMarks || {}).filter((id) => state.geneMarks[id].round === state.round);
-      if (geneMarkedIds.length) {
-        const geneBadges = document.createElement("div");
-        geneBadges.className = "laser-mark-badges";
-        geneBadges.style.left = "46.08%";
-        geneBadges.style.top = "calc(8.22% + 10.41% + 2px)";
-        geneBadges.innerHTML = geneMarkedIds.map((id) => `<span class="laser-mark-dot${settlementLocked ? " locked" : ""}" data-gene-pid="${id}" title="${settlementLocked ? "结算阶段已锁定" : "点击取消该玩家本轮的201基因库标记"}" style="background:${meepleColor(Number(id))};">${id}</span>`).join("");
-        mapImgWrap.appendChild(geneBadges);
-        if (!settlementLocked) {
-          geneBadges.querySelectorAll(".laser-mark-dot[data-gene-pid]").forEach((dot) => {
-            dot.addEventListener("click", () => {
-              socket.send({ type: "admin:setGeneMark", playerId: Number(dot.dataset.genePid), action: "remove", password: adminPassword });
-            });
+      geneZone.innerHTML = `
+        <span>🧬 经过201</span>
+        ${geneMarkedIds.length ? `<div class="zone-mark-badges">${geneMarkedIds.map((id) => `<span class="laser-mark-dot${settlementLocked ? " locked" : ""}" data-gene-pid="${id}" title="${settlementLocked ? "结算阶段已锁定" : "点击取消该玩家本轮的201基因库标记"}" style="background:${meepleColor(Number(id))};">${id}</span>`).join("")}</div>` : ""}
+      `;
+      mapImgWrap.appendChild(geneZone);
+      if (!settlementLocked) {
+        geneZone.querySelectorAll(".laser-mark-dot[data-gene-pid]").forEach((dot) => {
+          dot.addEventListener("click", (e) => {
+            e.stopPropagation();
+            socket.send({ type: "admin:setGeneMark", playerId: Number(dot.dataset.genePid), action: "remove", password: adminPassword });
           });
-        }
+        });
       }
     }
     renderMeepleTray(tabBody.querySelector("#meeple-tray"), state);
