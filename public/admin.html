@@ -1539,14 +1539,25 @@ function attachMeepleDrag(el, state) {
         // 102 (激光室)/201 (基因库)'s effects are a separate manual flag on
         // top of the normal move -- always relocate them there, then ask
         // separately whether to also mark this round's effect.
-        if (target.room === "102") openLaserMarkConfirmModal(playerId, "stop", state);
-        else if (target.room === "201") openGeneMarkConfirmModal(playerId, "stop", state);
-        // Leaving 201 for somewhere else -- offer to undo an existing mark
-        // rather than leaving it stuck on someone no longer there (they can
-        // also just click the badge directly; this just meets them at the
-        // point where it's most likely to matter).
-        else if (fromRoom === "201" && state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
-          openGeneMarkLeaveConfirmModal(playerId, state);
+        if (target.room === "102") {
+          openLaserMarkConfirmModal(playerId, "stop", state);
+        } else if (target.room === "201") {
+          openGeneMarkConfirmModal(playerId, "stop", state);
+          // 201 only connects down to the rest of the map via 102's ladder
+          // (see the map art) -- arriving from anywhere except 102 itself
+          // means this move passed through it too.
+          if (fromRoom && fromRoom !== "102") openLaserMarkConfirmModal(playerId, "pass", state);
+        } else if (fromRoom === "201") {
+          // Leaving 201 for anywhere that isn't 102 also passes back
+          // through the same ladder.
+          openLaserMarkConfirmModal(playerId, "pass", state);
+          // ...and offer to undo an existing 201 mark rather than leaving it
+          // stuck on someone no longer there (they can also just click the
+          // badge directly; this just meets them at the point where it's
+          // most likely to matter).
+          if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+            openGeneMarkLeaveConfirmModal(playerId, state);
+          }
         }
       } else if (target && target.kind === "laser") {
         // Merely passing through 102 -- no room change at all, purely a
@@ -1571,8 +1582,11 @@ function attachMeepleDrag(el, state) {
         }
       } else if (target && target.kind === "tray") {
         socket.send({ type: "admin:setPlayerRoom", playerId, room: null, password: adminPassword });
-        if (fromRoom === "201" && state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
-          openGeneMarkLeaveConfirmModal(playerId, state);
+        if (fromRoom === "201") {
+          openLaserMarkConfirmModal(playerId, "pass", state);
+          if (state.geneMarks && state.geneMarks[playerId] && state.geneMarks[playerId].round === state.round) {
+            openGeneMarkLeaveConfirmModal(playerId, state);
+          }
         }
       }
     }

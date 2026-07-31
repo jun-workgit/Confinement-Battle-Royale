@@ -1374,7 +1374,11 @@ wss.on("connection", (ws) => {
           }
           player.health = after;
           if (becameShadow) player.room = "B701";
-          state.laserMarks[playerId] = { round: state.round, healthBefore, roomBefore };
+          // roomBefore is only ever restored on "remove" if THIS mark is what
+          // moved them (i.e. it killed them) -- a non-fatal mark never
+          // touches room at all, so undoing it must not either, even if
+          // admin has since moved them somewhere else entirely.
+          state.laserMarks[playerId] = { round: state.round, healthBefore, roomBefore, becameShadow };
           addPlayerLog(state, playerId, {
             round: state.round,
             source: "laser102",
@@ -1389,7 +1393,7 @@ wss.on("connection", (ws) => {
           const mark = state.laserMarks[playerId];
           if (!mark || mark.round !== state.round) return;
           player.health = mark.healthBefore;
-          player.room = mark.roomBefore;
+          if (mark.becameShadow) player.room = mark.roomBefore;
           delete state.laserMarks[playerId];
           const logs = state.playerLogs[String(playerId)];
           if (logs) {
