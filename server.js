@@ -1213,7 +1213,11 @@ wss.on("connection", (ws) => {
       // stats/health, round, poison floors) so all of it reflects to other
       // clients in one go rather than field-by-field.
       case "admin:commitEdits": {
-        if (state.phase !== "prep" && state.phase !== "in_progress") return;
+        // "ended" stays editable too -- admin can keep correcting stats/
+        // health after the game is over, reflected on the same ranking
+        // table (and every other view's own results screen, since they all
+        // just render off this one broadcast state.players).
+        if (state.phase !== "prep" && state.phase !== "in_progress" && state.phase !== "ended") return;
         if (Array.isArray(msg.players)) {
           for (const pu of msg.players) {
             const player = state.players.find((p) => p.id === Number(pu.id));
@@ -1225,7 +1229,7 @@ wss.on("connection", (ws) => {
             // "resubmitted the same values") is worth an audit-log entry —
             // and only once the game is actually running (prep-phase edits
             // are just initial setup, not a round event to validate later).
-            if (state.phase === "in_progress") {
+            if (state.phase === "in_progress" || state.phase === "ended") {
               const healthDelta = newHealth - player.health;
               const statDeltas = {};
               for (const k of ["power", "speed", "weight"]) {
