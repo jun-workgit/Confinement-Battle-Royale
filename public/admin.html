@@ -96,6 +96,36 @@ function commitEdit(state) {
   draft = null;
 }
 
+// Round-0-prep-only conveniences for a table read/spawn-picking phase admin
+// wants to skip (playtesting, filling in absent players, etc.) -- both send
+// the SAME messages a player's own client would (user:setStats/user:setSpawn,
+// neither admin-password-gated to begin with), just computed for everyone at
+// once instead of one player editing their own. Immediate actions, not part
+// of the batched edit/commit flow, matching how spawn room already works.
+function randomStatsSplit(total) {
+  const stats = { power: 0, speed: 0, weight: 0 };
+  const keys = STAT_DEFS.map((d) => d.id);
+  for (let i = 0; i < total; i++) {
+    stats[keys[Math.floor(Math.random() * keys.length)]]++;
+  }
+  return stats;
+}
+
+function randomizeAllStats(state) {
+  if (!confirm(`确定要为全部 ${state.players.length} 名玩家随机分配属性点数吗？将覆盖玩家已自行分配的属性。`)) return;
+  for (const p of state.players) {
+    socket.send({ type: "user:setStats", playerId: p.id, stats: randomStatsSplit(STAT_POINTS_TOTAL) });
+  }
+}
+
+function randomizeAllSpawns(state) {
+  if (!confirm(`确定要为全部 ${state.players.length} 名玩家随机分配出生点吗？将覆盖玩家已自行选择的出生点。`)) return;
+  for (const p of state.players) {
+    const room = SPAWN_ROOM_IDS[Math.floor(Math.random() * SPAWN_ROOM_IDS.length)];
+    socket.send({ type: "user:setSpawn", playerId: p.id, room });
+  }
+}
+
 // Pulls Strength/Speed/Capacity/End Room from the stats spreadsheet and
 // applies them. Stats land in `draft` only (admin still has to click
 // "确认" to commit — this button is only visible while isEditing), but
@@ -1154,7 +1184,10 @@ function renderDashboard(state) {
     </div>
     <div class="panel-body" id="tab-body"></div>
     <div style="display:flex;justify-content:flex-end;gap:12px;padding:0 22px 22px;">
-      ${isPrep && !inSettlement ? `<button class="btn" id="start-btn" ${isEditing ? "disabled" : ""}>开始游戏</button>` : ""}
+      ${isPrep && !inSettlement ? `
+        <button class="btn secondary" id="randomize-stats-btn" ${isEditing ? "disabled" : ""}>随机分配属性</button>
+        <button class="btn secondary" id="randomize-spawn-btn" ${isEditing ? "disabled" : ""}>随机分配出生点</button>
+        <button class="btn" id="start-btn" ${isEditing ? "disabled" : ""}>开始游戏</button>` : ""}
       ${isProgress ? `<button class="btn secondary" id="end-btn" ${isEditing || inSettlement ? "disabled" : ""}>结束游戏</button>` : ""}
     </div>
   `;
@@ -1460,6 +1493,8 @@ function renderDashboard(state) {
   }
 
   if (isPrep && !inSettlement) {
+    panel.querySelector("#randomize-stats-btn").addEventListener("click", () => randomizeAllStats(state));
+    panel.querySelector("#randomize-spawn-btn").addEventListener("click", () => randomizeAllSpawns(state));
     panel.querySelector("#start-btn").addEventListener("click", () => {
       if (isEditing) return;
       // "开始游戏" no longer flips phase directly -- it opens Round 0's
