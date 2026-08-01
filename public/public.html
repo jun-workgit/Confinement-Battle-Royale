@@ -75,8 +75,7 @@ document.body.appendChild(soundToggleBox);
 renderSoundToggle();
 soundToggleBox.querySelector("#sound-toggle-btn").addEventListener("click", toggleSoundMuted);
 
-let pingHandler = null;
-const socket = connectGameSocket((state) => {
+connectGameSocket((state) => {
   const poisonKey = JSON.stringify(state.poisonFloors || []);
   if (lastPoisonFloorsKey !== undefined && poisonKey !== lastPoisonFloorsKey) {
     poisonAudio.currentTime = 0;
@@ -85,8 +84,7 @@ const socket = connectGameSocket((state) => {
   lastPoisonFloorsKey = poisonKey;
   latestState = state;
   render();
-}, (ts) => { if (pingHandler) pingHandler(ts); });
-pingHandler = startPingIndicator(socket);
+});
 startTimerTicker(() => latestState && latestState.timer);
 
 function render() {

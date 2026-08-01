@@ -205,12 +205,10 @@ function renderLogin() {
 
 function startApp() {
   if (socket) { render(); return; }
-  let pingHandler = null;
   socket = connectGameSocket((state) => {
     latestState = state;
     render();
-  }, (ts) => { if (pingHandler) pingHandler(ts); });
-  pingHandler = startPingIndicator(socket);
+  });
   startTimerTicker(() => latestState && latestState.timer);
 }
 

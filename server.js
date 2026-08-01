@@ -1067,13 +1067,6 @@ wss.on("connection", (ws) => {
     if (isAdminAction && msg.password !== ADMIN_PASSWORD) return;
 
     switch (msg.type) {
-      // Connection-liveness ping (admin.html/public.html only -- see their
-      // own comments) -- replied to directly, never broadcast, so it never
-      // touches game state or other clients.
-      case "ping": {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: "pong", ts: msg.ts }));
-        break;
-      }
       case "admin:createGame": {
         if (state.phase !== "setup") return;
         const n = Math.max(1, Math.min(200, Math.round(Number(msg.playerCount) || 0)));
