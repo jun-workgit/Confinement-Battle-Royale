@@ -355,18 +355,21 @@ function previewSectionDeltas(key, sec, draft, state) {
       }
     }
   } else if (key === "shadow_meet") {
-    // Mirrors server.js's commitSectionEffect exactly -- 暗影共鸣 is ONE
-    // trigger per Shadow that absorbs, not scaled by how much they took.
+    // Mirrors server.js's commitSectionEffect exactly -- a Shadow gains (and
+    // 暗影共鸣 only fires) per DRAINABLE living player present, excluding
+    // 暗影使者 entirely (nothing to absorb from someone immune, not a free
+    // gain off them).
     for (const ev of sec.data.events) {
       const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
-      const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
       const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
       for (const p of drainedLiving) {
         bump(p.id, -shadowCount);
       }
-      for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
-        bump(p.id, livingCount);
-        shadowEnvoyResonance += 1;
+      if (drainedLiving.length > 0) {
+        for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
+          bump(p.id, drainedLiving.length);
+          shadowEnvoyResonance += 1;
+        }
       }
     }
     if (shadowEnvoyResonance > 0) {
@@ -435,7 +438,7 @@ function previewSectionDeltas(key, sec, draft, state) {
       const id = Number(playerId);
       const p = find(id);
       if (p && p.health >= 0) {
-        const clamped = Math.max(1, p.health + threshold);
+        const clamped = Math.min(DEFAULT_HEALTH, Math.max(1, p.health + threshold));
         if (clamped !== p.health) bump(id, clamped - p.health);
       }
     }
@@ -461,6 +464,9 @@ function previewSectionDeltas(key, sec, draft, state) {
     } else if (before > 0 && after <= 0) {
       after = -(state.reviveThreshold || DEFAULT_REVIVE_THRESHOLD);
     }
+    // Health never exceeds the game's starting max, regardless of source --
+    // see server.js's commitSectionEffect for the same cap.
+    if (after > DEFAULT_HEALTH) after = DEFAULT_HEALTH;
     healthDeltas[idStr] = after - before;
   }
 

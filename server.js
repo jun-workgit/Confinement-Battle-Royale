@@ -576,29 +576,30 @@ function commitSectionEffect(section, data, working, state) {
   } else if (section === "shadow_meet") {
     // "若'暗影'玩家和存活玩家同处一室，每个存活玩家均会被每个暗影吸取1点
     // 生命值" -- one drain, two sides: living players lose 1 per Shadow
-    // present, and each Shadow gains 1 per living player present (this IS
-    // the absorption revival is based on, applied here rather than in
-    // "revival" so it's visible in this accordion too). Runs AFTER "combat"
-    // (see computeShadowMeetEvents), so this reflects who actually survived
-    // this round's fights, not who merely started the room alive.
-    // 暗影使者's "暗影共鸣": "免疫暗影吸取生命" excludes them from the
-    // drained side entirely (their presence still counts toward each
-    // Shadow's own gain below -- only THEIR health is protected, not the
-    // Shadow's take); "每当其他暗影吸取生命，你恢复1点生命" is ONE trigger per
-    // Shadow that absorbs (this round, across the whole map), regardless of
-    // how much health that Shadow actually absorbed -- a Shadow draining 3
-    // living players in one room is still a single "吸取生命" instance, not
-    // 3, so this counts Shadows, not the amount they took.
+    // present, and each Shadow gains 1 per DRAINABLE living player present
+    // (this IS the absorption revival is based on, applied here rather than
+    // in "revival" so it's visible in this accordion too). Runs AFTER
+    // "combat" (see computeShadowMeetEvents), so this reflects who actually
+    // survived this round's fights, not who merely started the room alive.
+    // 暗影使者's "暗影共鸣": "免疫暗影吸取生命" means there's nothing FOR a
+    // Shadow to absorb from them at all -- excluded from drainedLiving (no
+    // -1 loss to them) AND from the Shadow's own gain (a room with only the
+    // envoy as its "living" player yields the Shadow nothing, not a free
+    // absorption off someone who was never actually drained). "每当其他暗影
+    // 吸取生命，你恢复1点生命" only fires per Shadow that actually absorbed
+    // something (drainedLiving.length > 0) -- once per Shadow this round,
+    // regardless of how much they took.
     for (const ev of data.events) {
       const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
-      const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
       const drainedLiving = ev.playerIds.map(find).filter((p) => p && p.health > 0 && p.roleId !== "shadow_envoy");
       for (const p of drainedLiving) {
         bump(p.id, -shadowCount);
       }
-      for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
-        bump(p.id, livingCount);
-        shadowEnvoyResonance += 1;
+      if (drainedLiving.length > 0) {
+        for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
+          bump(p.id, drainedLiving.length);
+          shadowEnvoyResonance += 1;
+        }
       }
     }
     if (shadowEnvoyResonance > 0) {
@@ -719,6 +720,12 @@ function commitSectionEffect(section, data, working, state) {
         undertakerGains[undertaker.id] = (undertakerGains[undertaker.id] || 0) + 1;
       }
     }
+    // Health never exceeds the game's starting max, regardless of source
+    // (surgery's +4, 暗影共鸣's resonance, a pill, wine's +2, ...) -- this is
+    // the one shared choke point every section's healthDeltas passes
+    // through, so capping here covers all of them at once. Never touches a
+    // Shadow's negative debt value (always <= 0, so this never applies).
+    if (after > DEFAULT_HEALTH) after = DEFAULT_HEALTH;
     p.health = after;
     healthDeltas[id] = after - before;
   }
@@ -757,7 +764,10 @@ function commitSectionEffect(section, data, working, state) {
       const p = find(id);
       if (p && p.health >= 0) {
         const beforeClamp = p.health;
-        p.health = Math.max(1, p.health + threshold);
+        // Capped the same as the generic clamp loop above (never past the
+        // game's starting max), which a high enough admin-set
+        // reviveThreshold could otherwise push past on its own.
+        p.health = Math.min(DEFAULT_HEALTH, Math.max(1, p.health + threshold));
         if (p.health !== beforeClamp) healthDeltas[id] = (healthDeltas[id] || 0) + (p.health - beforeClamp);
         revivedIds.push(id);
       }
