@@ -175,10 +175,12 @@ function renderLogin() {
 
 function startApp() {
   if (socket) { render(); return; }
+  let pingHandler = null;
   socket = connectGameSocket((state) => {
     latestState = state;
     render();
-  });
+  }, (ts) => { if (pingHandler) pingHandler(ts); });
+  pingHandler = startPingIndicator(socket);
   startTimerTicker(() => latestState && latestState.timer);
 }
 
@@ -353,6 +355,8 @@ function previewSectionDeltas(key, sec, draft, state) {
       }
     }
   } else if (key === "shadow_meet") {
+    // Mirrors server.js's commitSectionEffect exactly -- 暗影共鸣 is ONE
+    // trigger per Shadow that absorbs, not scaled by how much they took.
     for (const ev of sec.data.events) {
       const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
       const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
@@ -362,7 +366,7 @@ function previewSectionDeltas(key, sec, draft, state) {
       }
       for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
         bump(p.id, livingCount);
-        shadowEnvoyResonance += livingCount;
+        shadowEnvoyResonance += 1;
       }
     }
     if (shadowEnvoyResonance > 0) {
@@ -1279,17 +1283,19 @@ function renderDashboard(state) {
             ${state.chemistAction ? `<button class="btn secondary" id="chemist-action-clear-btn" style="padding:4px 10px;font-size:12px;">取消</button>` : ""}
           `}
         </div>` : ""}
-        <div class="rocket-tray">
-          <div class="rocket-icon${settlementLocked ? " locked" : ""}" id="rocket-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到房间标记本轮火箭筒袭击目标"}">🚀</div>
-          ${state.rocketTargetRoom
-            ? `<span>本轮火箭筒目标：<b>${getRoomLabel(state.rocketTargetRoom)}</b></span>${settlementLocked ? "" : `<button class="btn secondary" id="rocket-cancel-btn" style="padding:4px 10px;font-size:12px;">取消</button>`}`
-            : `<span style="color:#8b9482;font-size:13px;">拖动火箭图标到房间以标记本轮火箭筒目标</span>`}
-        </div>
-        <div class="rocket-tray">
-          <div class="b101-vote-icon${settlementLocked ? " locked" : ""}" id="b101-vote-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到左侧楼层标签，为本轮投票+10票（可重复使用，仅管理员可见）"}">🗳️</div>
-          ${b101Summary
-            ? `<span>B101 投票加成：<b>${b101Summary}</b>（每次+10票，点击楼层上的徽章可移除一次）</span>`
-            : `<span style="color:#8b9482;font-size:13px;">拖动🗳️图标到左侧楼层标签，为本轮投票+10票（B101 控制室功能，可重复使用，仅管理员可见）</span>`}
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div class="rocket-tray" style="flex:1;min-width:220px;">
+            <div class="rocket-icon${settlementLocked ? " locked" : ""}" id="rocket-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到房间标记本轮火箭筒袭击目标"}">🚀</div>
+            ${state.rocketTargetRoom
+              ? `<span>本轮火箭筒目标：<b>${getRoomLabel(state.rocketTargetRoom)}</b></span>${settlementLocked ? "" : `<button class="btn secondary" id="rocket-cancel-btn" style="padding:4px 10px;font-size:12px;">取消</button>`}`
+              : `<span style="color:#8b9482;font-size:13px;">拖动火箭图标到房间以标记本轮火箭筒目标</span>`}
+          </div>
+          <div class="rocket-tray" style="flex:1;min-width:220px;">
+            <div class="b101-vote-icon${settlementLocked ? " locked" : ""}" id="b101-vote-drag-icon" title="${settlementLocked ? "结算阶段已锁定" : "拖动到左侧楼层标签，为本轮投票+10票（可重复使用，仅管理员可见）"}">🗳️</div>
+            ${b101Summary
+              ? `<span>B101 投票加成：<b>${b101Summary}</b>（每次+10票，点击楼层上的徽章可移除一次）</span>`
+              : `<span style="color:#8b9482;font-size:13px;">拖动🗳️图标到左侧楼层标签，为本轮投票+10票（B101 控制室功能，可重复使用，仅管理员可见）</span>`}
+          </div>
         </div>
         <div id="meeple-tray" class="meeple-tray"></div>
         <div id="poison-map"></div>

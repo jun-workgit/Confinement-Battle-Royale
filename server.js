@@ -584,9 +584,11 @@ function commitSectionEffect(section, data, working, state) {
     // 暗影使者's "暗影共鸣": "免疫暗影吸取生命" excludes them from the
     // drained side entirely (their presence still counts toward each
     // Shadow's own gain below -- only THEIR health is protected, not the
-    // Shadow's take); "每当其他暗影吸取生命，你恢复1点生命" is tallied here
-    // (every event, across the whole map) and paid out once after the full
-    // events loop below.
+    // Shadow's take); "每当其他暗影吸取生命，你恢复1点生命" is ONE trigger per
+    // Shadow that absorbs (this round, across the whole map), regardless of
+    // how much health that Shadow actually absorbed -- a Shadow draining 3
+    // living players in one room is still a single "吸取生命" instance, not
+    // 3, so this counts Shadows, not the amount they took.
     for (const ev of data.events) {
       const shadowCount = ev.playerIds.map(find).filter((p) => p && p.health <= 0).length;
       const livingCount = ev.playerIds.map(find).filter((p) => p && p.health > 0).length;
@@ -596,7 +598,7 @@ function commitSectionEffect(section, data, working, state) {
       }
       for (const p of ev.playerIds.map(find).filter((p) => p && p.health <= 0)) {
         bump(p.id, livingCount);
-        shadowEnvoyResonance += livingCount;
+        shadowEnvoyResonance += 1;
       }
     }
     if (shadowEnvoyResonance > 0) {
@@ -1055,6 +1057,13 @@ wss.on("connection", (ws) => {
     if (isAdminAction && msg.password !== ADMIN_PASSWORD) return;
 
     switch (msg.type) {
+      // Connection-liveness ping (admin.html/public.html only -- see their
+      // own comments) -- replied to directly, never broadcast, so it never
+      // touches game state or other clients.
+      case "ping": {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: "pong", ts: msg.ts }));
+        break;
+      }
       case "admin:createGame": {
         if (state.phase !== "setup") return;
         const n = Math.max(1, Math.min(200, Math.round(Number(msg.playerCount) || 0)));

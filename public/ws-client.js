@@ -1,4 +1,7 @@
-function connectGameSocket(onState) {
+// `onPong` is optional (only admin.html/public.html pass one -- see their
+// own startPingIndicator calls; index.html's single-arg call leaves it
+// undefined, so a stray "pong" there is simply never dispatched anywhere).
+function connectGameSocket(onState, onPong) {
   let ws;
   let closedByUs = false;
 
@@ -8,6 +11,7 @@ function connectGameSocket(onState) {
     ws.addEventListener("message", (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === "state") onState(msg.state);
+      else if (msg.type === "pong" && onPong) onPong(msg.ts);
     });
     ws.addEventListener("close", () => {
       if (!closedByUs) setTimeout(connect, 1000);
@@ -24,6 +28,41 @@ function connectGameSocket(onState) {
       closedByUs = true;
       ws.close();
     },
+  };
+}
+
+// Connection-liveness indicator (admin.html/public.html only) -- pings once
+// a second over the SAME socket the rest of the app already uses (no
+// separate connection), showing round-trip latency in a small fixed badge
+// top-right. Falls back to a "reconnecting" state if a pong hasn't arrived
+// in a while, since the underlying socket already silently auto-reconnects
+// on its own (see connectGameSocket's close handler) with no other visible
+// sign that happened.
+function startPingIndicator(socket) {
+  const badge = document.createElement("div");
+  badge.className = "ping-indicator";
+  badge.innerHTML = `<span class="ping-dot"></span><span class="ping-text">--</span>`;
+  document.body.appendChild(badge);
+  const dot = badge.querySelector(".ping-dot");
+  const text = badge.querySelector(".ping-text");
+
+  let lastPongAt = Date.now();
+  setInterval(() => {
+    socket.send({ type: "ping", ts: Date.now() });
+    // No pong in 3+ seconds (about 3 missed beats) -- the underlying socket
+    // is very likely mid-reconnect (see connectGameSocket), so say so
+    // instead of just freezing on the last good number.
+    if (Date.now() - lastPongAt > 3000) {
+      dot.className = "ping-dot down";
+      text.textContent = "重连中…";
+    }
+  }, 1000);
+
+  return function onPong(ts) {
+    lastPongAt = Date.now();
+    const rtt = Date.now() - ts;
+    dot.className = "ping-dot up";
+    text.textContent = `${rtt}ms`;
   };
 }
 
